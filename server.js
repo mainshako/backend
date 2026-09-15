@@ -55,5 +55,10 @@ export const app = createApp();
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const PORT = process.env.PORT || 3000;
-  app.listen(PORT, '0.0.0.0', () => console.log(`Button marketplace server running on port ${PORT}`));
+  const configured = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const paymentProvider = String(process.env.PAYMENT_PROVIDER || 'disabled').toLowerCase();
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Button marketplace server running on port ${PORT}`);
+    console.log(`Button readiness: marketplaceConfigured=${configured} paymentProvider=${paymentProvider}`);
+  });
 }
