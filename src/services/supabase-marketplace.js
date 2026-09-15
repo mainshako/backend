@@ -65,7 +65,7 @@ export async function createMarketplaceOrder({ buyerId, paymentMethod, shippingA
   const { url, serviceKey } = config(environment);
   const normalized = normalizeOrderItems(items);
   const method = String(paymentMethod || '').toLowerCase();
-  if (!['cash_on_delivery', 'hyperpay', 'card', 'crypto'].includes(method)) {
+  if (!['cash_on_delivery', 'hyperpay', 'card'].includes(method)) {
     throw new MarketplaceApiError(400, 'UNSUPPORTED_PAYMENT_METHOD', 'طريقة الدفع غير مدعومة.');
   }
   const response = await fetchImpl(`${url}/rest/v1/rpc/button_create_order`, {
