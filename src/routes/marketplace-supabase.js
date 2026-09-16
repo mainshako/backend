@@ -215,6 +215,7 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
       const user = await authenticateSupabaseRequest(req, environment);
       const order = await getMarketplaceOrder(req.params.id, user.id, authorizationToken(req), environment);
       if (!['hyperpay', 'card'].includes(order.payment_method)) throw new MarketplaceApiError(400, 'ORDER_NOT_ELECTRONIC', 'هذا الطلب لا يستخدم الدفع الإلكتروني.');
+      if (['cancelled', 'refunded'].includes(order.order_status)) throw new MarketplaceApiError(409, 'ORDER_NOT_PAYABLE', 'هذا الطلب ملغي أو مسترد ولا يمكن بدء دفعة جديدة له.');
       if (order.payment_status === 'paid') return res.json({ paid: true, order });
       if (order.payment_status === 'pending' && order.provider_reference) return res.json({ paid: false, checkoutId: order.provider_reference, reused: true });
       const provider = getPaymentProvider(environment);
@@ -227,13 +228,43 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
   router.post('/orders/:id/payment/verify', async (req, res) => {
     try {
       const user = await authenticateSupabaseRequest(req, environment);
-      const order = await getMarketplaceOrder(req.params.id, user.id, authorizationToken(req), environment);
+      const accessToken = authorizationToken(req);
+      const order = await getMarketplaceOrder(req.params.id, user.id, accessToken, environment);
       if (order.payment_status === 'paid') return res.json({ paid: true, order });
       const checkoutId = String(req.body?.checkoutId || order.provider_reference || '');
       if (order.provider_reference && checkoutId !== order.provider_reference) throw new MarketplaceApiError(400, 'PAYMENT_REFERENCE_MISMATCH', 'مرجع الدفع لا يطابق الطلب.');
       const verification = await getPaymentProvider(environment).verifyPayment({ checkoutId });
       const status = verification.paid ? 'paid' : (verification.pending ? 'pending' : 'failed');
-      await markOrderPayment(order.id, user.id, verification.providerReference, status, verification.resultCode, environment);
+      const paymentState = await markOrderPayment(order.id, user.id, verification.providerReference, status, verification.resultCode, environment);
+
+      if (paymentState === 'refund_required') {
+        const paidCancelledOrder = await getMarketplaceOrder(order.id, user.id, accessToken, environment);
+        try {
+          const refundResult = await processElectronicRefund(paidCancelledOrder, user.id, environment);
+          return res.status(refundResult.httpStatus).json({
+            ...refundResult.body,
+            paid: true,
+            latePayment: true,
+            cancellationStatus: 'refund_required',
+            message: refundResult.body.refunded
+              ? 'وصل تأكيد الدفع بعد إلغاء الطلب، لذلك تم استرداد المبلغ تلقائيًا.'
+              : (refundResult.body.message || 'وصل تأكيد الدفع بعد إلغاء الطلب وتم تسجيل الاسترداد تلقائيًا.'),
+          });
+        } catch (refundError) {
+          console.error('Late payment refund status is uncertain:', refundError);
+          return res.status(202).json({
+            ok: true,
+            paid: true,
+            latePayment: true,
+            pending: true,
+            status: 'processing',
+            cancellationStatus: 'refund_required',
+            code: refundError?.code || 'REFUND_PROVIDER_UNCERTAIN',
+            message: 'تم اكتشاف دفعة بعد إلغاء الطلب وحفظ طلب الاسترداد. تعذر تأكيد نتيجة الاسترداد الآن ولن نرسل طلبًا مكررًا تلقائيًا.',
+          });
+        }
+      }
+
       res.json({ paid: verification.paid, pending: verification.pending, failed: status === 'failed', resultCode: verification.resultCode });
     } catch (error) { marketplaceErrorResponse(error, res); }
   });
