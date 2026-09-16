@@ -13,14 +13,18 @@ export function marketplaceConfiguration(environment = process.env) {
   const url = (environment.SUPABASE_URL || '').replace(/\/$/, '');
   const publicKey = environment.SUPABASE_PUBLISHABLE_KEY || environment.SUPABASE_ANON_KEY || '';
   const adminKey = environment.SUPABASE_SECRET_KEY || environment.SUPABASE_SERVICE_ROLE_KEY || '';
+  const backendSecret = environment.BUTTON_BACKEND_SHARED_SECRET || '';
   const clientKey = publicKey || adminKey;
+  const sharedBackendConfigured = Boolean(publicKey && backendSecret);
   return {
     url,
     publicKey,
     adminKey,
+    backendSecret,
     clientKey,
+    sharedBackendConfigured,
     marketplaceConfigured: Boolean(url && clientKey),
-    marketplaceAdminConfigured: Boolean(url && adminKey),
+    marketplaceAdminConfigured: Boolean(url && (adminKey || sharedBackendConfigured)),
   };
 }
 
@@ -34,8 +38,8 @@ function userConfig(environment) {
 
 function adminConfig(environment) {
   const config = marketplaceConfiguration(environment);
-  if (!config.url || !config.adminKey) {
-    throw new MarketplaceApiError(503, 'SUPABASE_ADMIN_NOT_CONFIGURED', 'إعداد الخادم السري لقاعدة البيانات غير متوفر بعد.');
+  if (!config.url || (!config.adminKey && !config.sharedBackendConfigured)) {
+    throw new MarketplaceApiError(503, 'SUPABASE_ADMIN_NOT_CONFIGURED', 'إعداد العمليات الخادمية الحساسة غير متوفر بعد.');
   }
   return config;
 }
@@ -48,6 +52,24 @@ export function supabaseAdminHeaders(adminKey, extra = {}) {
   const headers = { ...extra, apikey: adminKey };
   if (isLegacyJwtKey(adminKey)) headers.Authorization = `Bearer ${adminKey}`;
   return headers;
+}
+
+export function supabaseBackendHeaders(publicKey, backendSecret, extra = {}) {
+  if (!publicKey || !backendSecret) {
+    throw new MarketplaceApiError(503, 'SUPABASE_ADMIN_NOT_CONFIGURED', 'إعداد العمليات الخادمية الحساسة غير متوفر بعد.');
+  }
+  return { ...extra, apikey: publicKey, 'x-button-backend-key': backendSecret };
+}
+
+function privilegedRequest(config, directRpc, backendRpc, extra = {}) {
+  if (config.adminKey) {
+    return { endpoint: directRpc, headers: supabaseAdminHeaders(config.adminKey, extra), mode: 'admin_key' };
+  }
+  return {
+    endpoint: backendRpc,
+    headers: supabaseBackendHeaders(config.publicKey, config.backendSecret, extra),
+    mode: 'shared_secret',
+  };
 }
 
 export function supabaseUserHeaders(apiKey, accessToken, extra = {}) {
@@ -75,7 +97,6 @@ export async function authenticateSupabaseRequest(req, environment = process.env
   const { url, clientKey } = userConfig(environment);
   const accessToken = requestAccessToken(req);
   if (!accessToken) throw new MarketplaceApiError(401, 'AUTH_REQUIRED', 'سجّل الدخول أولًا.');
-
   const response = await fetchImpl(`${url}/auth/v1/user`, {
     headers: supabaseUserHeaders(clientKey, accessToken),
   });
@@ -133,9 +154,8 @@ export async function getMarketplaceOrder(orderId, buyerId, accessToken, environ
     buyer_id: `eq.${buyerId}`,
     limit: '1',
   });
-  const response = await fetchImpl(`${url}/rest/v1/orders?${query}`, {
-    headers: supabaseUserHeaders(clientKey, accessToken),
-  });
+  const headers = supabaseUserHeaders(clientKey, accessToken);
+  const response = await fetchImpl(`${url}/rest/v1/orders?${query}`, { headers });
   const rows = await readResponse(response);
   if (!Array.isArray(rows) || !rows.length) throw new MarketplaceApiError(404, 'ORDER_NOT_FOUND', 'الطلب غير موجود.');
   const itemQuery = new URLSearchParams({
@@ -143,9 +163,7 @@ export async function getMarketplaceOrder(orderId, buyerId, accessToken, environ
     order_id: `eq.${orderId}`,
     order: 'created_at.asc',
   });
-  const itemResponse = await fetchImpl(`${url}/rest/v1/order_items?${itemQuery}`, {
-    headers: supabaseUserHeaders(clientKey, accessToken),
-  });
+  const itemResponse = await fetchImpl(`${url}/rest/v1/order_items?${itemQuery}`, { headers });
   const orderItems = await readResponse(itemResponse);
   return { ...rows[0], items: Array.isArray(orderItems) ? orderItems : [] };
 }
@@ -172,7 +190,6 @@ export async function listBuyerOrders(buyerId, accessToken, environment = proces
     if (!grouped.has(item.order_id)) grouped.set(item.order_id, []);
     grouped.get(item.order_id).push(item);
   }
-
   const refundQuery = new URLSearchParams({
     select: 'id,order_id,status,provider_reference,provider_result_code,attempt_count,processing_started_at,last_error,updated_at',
     order_id: `in.(${ids.join(',')})`, order: 'created_at.desc',
@@ -208,11 +225,12 @@ export async function setSellerOrderStatus(accessToken, orderId, status, environ
 }
 
 export async function markOrderPayment(orderId, buyerId, providerReference, status, resultCode = null, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = adminConfig(environment);
+  const config = adminConfig(environment);
   const normalized = String(status || '').toLowerCase();
   if (!['pending','paid','failed'].includes(normalized)) throw new MarketplaceApiError(400, 'INVALID_PAYMENT_STATUS', 'حالة الدفع غير صالحة.');
-  const response = await fetchImpl(`${url}/rest/v1/rpc/button_set_order_payment_v2`, {
-    method: 'POST', headers: supabaseAdminHeaders(adminKey, jsonHeaders),
+  const request = privilegedRequest(config, 'button_set_order_payment_v2', 'button_backend_set_order_payment_v2', jsonHeaders);
+  const response = await fetchImpl(`${config.url}/rest/v1/rpc/${request.endpoint}`, {
+    method: 'POST', headers: request.headers,
     body: JSON.stringify({ p_order_id: orderId, p_buyer_id: buyerId, p_provider_reference: providerReference, p_status: normalized, p_result_code: resultCode })
   });
   return readResponse(response);
@@ -230,29 +248,40 @@ export async function cancelBuyerOrder(orderId, buyerId, reason = null, accessTo
 }
 
 export async function getPendingRefund(orderId, buyerId, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = adminConfig(environment);
-  const query = new URLSearchParams({ select:'id,order_id,buyer_id,amount,currency,status,provider_reference,provider_result_code,attempt_count,processing_started_at,last_error,reason,created_at,updated_at', order_id:`eq.${orderId}`, buyer_id:`eq.${buyerId}`, status:'in.(pending,processing)', order:'created_at.desc', limit:'1' });
-  const response = await fetchImpl(`${url}/rest/v1/refund_requests?${query}`, { headers: supabaseAdminHeaders(adminKey) });
+  const config = adminConfig(environment);
+  let response;
+  if (config.adminKey) {
+    const query = new URLSearchParams({ select:'id,order_id,buyer_id,amount,currency,status,provider_reference,provider_result_code,attempt_count,processing_started_at,last_error,reason,created_at,updated_at', order_id:`eq.${orderId}`, buyer_id:`eq.${buyerId}`, status:'in.(pending,processing)', order:'created_at.desc', limit:'1' });
+    response = await fetchImpl(`${config.url}/rest/v1/refund_requests?${query}`, { headers: supabaseAdminHeaders(config.adminKey) });
+  } else {
+    response = await fetchImpl(`${config.url}/rest/v1/rpc/button_backend_get_pending_refund`, {
+      method: 'POST',
+      headers: supabaseBackendHeaders(config.publicKey, config.backendSecret, jsonHeaders),
+      body: JSON.stringify({ p_order_id: orderId, p_buyer_id: buyerId }),
+    });
+  }
   const rows = await readResponse(response);
   if (!Array.isArray(rows) || !rows.length) throw new MarketplaceApiError(404,'REFUND_NOT_FOUND','لا يوجد طلب استرداد معلّق لهذا الطلب.');
   return rows[0];
 }
 
 export async function claimRefundProcessing(refundId, orderId, buyerId, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = adminConfig(environment);
-  const response = await fetchImpl(`${url}/rest/v1/rpc/button_claim_refund_processing`, {
-    method: 'POST', headers: supabaseAdminHeaders(adminKey, jsonHeaders),
+  const config = adminConfig(environment);
+  const request = privilegedRequest(config, 'button_claim_refund_processing', 'button_backend_claim_refund_processing', jsonHeaders);
+  const response = await fetchImpl(`${config.url}/rest/v1/rpc/${request.endpoint}`, {
+    method: 'POST', headers: request.headers,
     body: JSON.stringify({ p_refund_id: refundId, p_order_id: orderId, p_buyer_id: buyerId }),
   });
   return readResponse(response);
 }
 
 export async function recordRefundProcessing(refundId, orderId, buyerId, status, providerReference = null, resultCode = null, lastError = null, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = adminConfig(environment);
+  const config = adminConfig(environment);
   const normalized = String(status || '').toLowerCase();
   if (!['pending', 'processing'].includes(normalized)) throw new MarketplaceApiError(400, 'INVALID_REFUND_STATUS', 'حالة الاسترداد غير صالحة.');
-  const response = await fetchImpl(`${url}/rest/v1/rpc/button_record_refund_processing`, {
-    method: 'POST', headers: supabaseAdminHeaders(adminKey, jsonHeaders),
+  const request = privilegedRequest(config, 'button_record_refund_processing', 'button_backend_record_refund_processing', jsonHeaders);
+  const response = await fetchImpl(`${config.url}/rest/v1/rpc/${request.endpoint}`, {
+    method: 'POST', headers: request.headers,
     body: JSON.stringify({
       p_refund_id: refundId, p_order_id: orderId, p_buyer_id: buyerId, p_status: normalized,
       p_provider_reference: providerReference || null, p_result_code: resultCode || null, p_last_error: lastError || null,
@@ -262,9 +291,10 @@ export async function recordRefundProcessing(refundId, orderId, buyerId, status,
 }
 
 export async function finalizeRefundV2(refundId, orderId, buyerId, succeeded, providerReference, resultCode = null, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = adminConfig(environment);
-  const response = await fetchImpl(`${url}/rest/v1/rpc/button_finalize_refund_v2`, {
-    method: 'POST', headers: supabaseAdminHeaders(adminKey, jsonHeaders),
+  const config = adminConfig(environment);
+  const request = privilegedRequest(config, 'button_finalize_refund_v2', 'button_backend_finalize_refund_v2', jsonHeaders);
+  const response = await fetchImpl(`${config.url}/rest/v1/rpc/${request.endpoint}`, {
+    method: 'POST', headers: request.headers,
     body: JSON.stringify({
       p_refund_id: refundId, p_order_id: orderId, p_buyer_id: buyerId, p_succeeded: Boolean(succeeded),
       p_provider_reference: providerReference || null, p_result_code: resultCode || null,
