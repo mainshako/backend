@@ -9,6 +9,29 @@ import { createCorsOptions } from './src/config/cors.js';
 import { createMarketplaceSupabaseRouter } from './src/routes/marketplace-supabase.js';
 import { marketplaceConfiguration, supabaseAdminHeaders, supabaseBackendHeaders } from './src/services/supabase-marketplace.js';
 
+export async function probeMarketplaceAdmin(environment = process.env, fetchImpl = fetch) {
+  const configuration = marketplaceConfiguration(environment);
+  if (!configuration.marketplaceAdminConfigured) return { reachable: false, mode: 'not_configured' };
+
+  if (configuration.adminKey) {
+    const response = await fetchImpl(`${configuration.url}/rest/v1/orders?select=id&limit=1`, {
+      headers: supabaseAdminHeaders(configuration.adminKey),
+    });
+    if (!response.ok) throw new Error(`admin_key_http_${response.status}`);
+    return { reachable: true, mode: 'admin_key' };
+  }
+
+  const response = await fetchImpl(`${configuration.url}/rest/v1/rpc/button_backend_ping`, {
+    method: 'POST',
+    headers: supabaseBackendHeaders(configuration.publicKey, configuration.backendSecret, { 'Content-Type': 'application/json' }),
+    body: '{}',
+  });
+  if (!response.ok) throw new Error(`shared_secret_http_${response.status}`);
+  const result = await response.json();
+  if (result !== true) throw new Error('shared_secret_unexpected_response');
+  return { reachable: true, mode: 'shared_secret' };
+}
+
 export function createApp(environment = process.env) {
   const app = express();
   app.use(helmet());
@@ -36,6 +59,7 @@ export function createApp(environment = process.env) {
   };
   app.get('/health', (_req, res) => res.json(healthPayload()));
   app.get('/api/health', (_req, res) => res.json(healthPayload()));
+
   const readyHandler = (_req, res) => {
     const payload = healthPayload();
     const ready = payload.marketplaceConfigured;
@@ -43,6 +67,32 @@ export function createApp(environment = process.env) {
   };
   app.get('/ready', readyHandler);
   app.get('/api/ready', readyHandler);
+
+  const adminReadyHandler = async (_req, res) => {
+    const payload = healthPayload();
+    try {
+      const admin = await probeMarketplaceAdmin(environment);
+      const ready = Boolean(admin.reachable);
+      res.status(ready ? 200 : 503).json({
+        ...payload,
+        ok: ready,
+        ready,
+        marketplaceAdminReachable: ready,
+        marketplaceAdminMode: admin.mode,
+      });
+    } catch (error) {
+      console.error('Button privileged readiness check failed:', error?.message || error);
+      res.status(503).json({
+        ...payload,
+        ok: false,
+        ready: false,
+        marketplaceAdminReachable: false,
+        code: 'MARKETPLACE_ADMIN_UNREACHABLE',
+      });
+    }
+  };
+  app.get('/ready/admin', adminReadyHandler);
+  app.get('/api/ready/admin', adminReadyHandler);
 
   app.use('/api/marketplace', createMarketplaceSupabaseRouter(environment));
   app.use('/api', createMarketplaceSupabaseRouter(environment));
@@ -59,29 +109,6 @@ export function createApp(environment = process.env) {
 }
 
 export const app = createApp();
-
-async function probeMarketplaceAdmin(environment = process.env, fetchImpl = fetch) {
-  const configuration = marketplaceConfiguration(environment);
-  if (!configuration.marketplaceAdminConfigured) return { reachable: false, mode: 'not_configured' };
-
-  if (configuration.adminKey) {
-    const response = await fetchImpl(`${configuration.url}/rest/v1/orders?select=id&limit=1`, {
-      headers: supabaseAdminHeaders(configuration.adminKey),
-    });
-    if (!response.ok) throw new Error(`admin_key_http_${response.status}`);
-    return { reachable: true, mode: 'admin_key' };
-  }
-
-  const response = await fetchImpl(`${configuration.url}/rest/v1/rpc/button_backend_ping`, {
-    method: 'POST',
-    headers: supabaseBackendHeaders(configuration.publicKey, configuration.backendSecret, { 'Content-Type': 'application/json' }),
-    body: '{}',
-  });
-  if (!response.ok) throw new Error(`shared_secret_http_${response.status}`);
-  const result = await response.json();
-  if (result !== true) throw new Error('shared_secret_unexpected_response');
-  return { reachable: true, mode: 'shared_secret' };
-}
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const PORT = process.env.PORT || 3000;
