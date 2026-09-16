@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import {
   marketplaceConfiguration,
   supabaseAdminHeaders,
+  supabaseBackendHeaders,
   supabaseUserHeaders,
   normalizeOrderItems,
+  markOrderPayment,
   MarketplaceApiError,
 } from '../src/services/supabase-marketplace.js';
 
@@ -27,6 +29,49 @@ test('admin key alone remains backward compatible', () => {
   assert.equal(config.marketplaceConfigured, true);
   assert.equal(config.marketplaceAdminConfigured, true);
   assert.equal(config.clientKey, 'header.payload.signature');
+});
+
+test('shared backend secret enables sensitive operations without service_role', () => {
+  const config = marketplaceConfiguration({
+    SUPABASE_URL: 'https://example.supabase.co',
+    SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+    BUTTON_BACKEND_SHARED_SECRET: 'server-only-secret',
+  });
+  assert.equal(config.marketplaceConfigured, true);
+  assert.equal(config.marketplaceAdminConfigured, true);
+  assert.equal(config.sharedBackendConfigured, true);
+  assert.equal(config.adminKey, '');
+});
+
+test('shared backend secret uses a dedicated header and never Authorization', () => {
+  const headers = supabaseBackendHeaders('sb_publishable_test', 'server-only-secret', { 'Content-Type': 'application/json' });
+  assert.equal(headers.apikey, 'sb_publishable_test');
+  assert.equal(headers['x-button-backend-key'], 'server-only-secret');
+  assert.equal(headers.Authorization, undefined);
+});
+
+test('payment mutation uses narrow backend RPC when service_role is absent', async () => {
+  const calls = [];
+  await markOrderPayment(
+    '22222222-2222-2222-2222-222222222222',
+    '11111111-1111-1111-1111-111111111111',
+    'checkout-reference-123',
+    'pending',
+    null,
+    {
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+      BUTTON_BACKEND_SHARED_SECRET: 'server-only-secret',
+    },
+    async (url, options = {}) => {
+      calls.push({ url, options });
+      return new Response(JSON.stringify('pending'), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  );
+  assert.match(calls[0].url, /\/rpc\/button_backend_set_order_payment_v2$/);
+  assert.equal(calls[0].options.headers.apikey, 'sb_publishable_test');
+  assert.equal(calls[0].options.headers['x-button-backend-key'], 'server-only-secret');
+  assert.equal(calls[0].options.headers.Authorization, undefined);
 });
 
 test('modern secret key is not copied into Authorization header', () => {
