@@ -9,14 +9,35 @@ export class MarketplaceApiError extends Error {
   }
 }
 
-function config(environment) {
+export function marketplaceConfiguration(environment = process.env) {
   const url = (environment.SUPABASE_URL || '').replace(/\/$/, '');
-  // Prefer Supabase's modern sb_secret_ key. Legacy service_role JWT remains supported during migration.
+  const publicKey = environment.SUPABASE_PUBLISHABLE_KEY || environment.SUPABASE_ANON_KEY || '';
   const adminKey = environment.SUPABASE_SECRET_KEY || environment.SUPABASE_SERVICE_ROLE_KEY || '';
-  if (!url || !adminKey) {
+  const clientKey = publicKey || adminKey;
+  return {
+    url,
+    publicKey,
+    adminKey,
+    clientKey,
+    marketplaceConfigured: Boolean(url && clientKey),
+    marketplaceAdminConfigured: Boolean(url && adminKey),
+  };
+}
+
+function userConfig(environment) {
+  const config = marketplaceConfiguration(environment);
+  if (!config.url || !config.clientKey) {
     throw new MarketplaceApiError(503, 'SUPABASE_SERVER_NOT_CONFIGURED', 'قاعدة البيانات غير مربوطة بالخادم بعد.');
   }
-  return { url, adminKey };
+  return config;
+}
+
+function adminConfig(environment) {
+  const config = marketplaceConfiguration(environment);
+  if (!config.url || !config.adminKey) {
+    throw new MarketplaceApiError(503, 'SUPABASE_ADMIN_NOT_CONFIGURED', 'إعداد الخادم السري لقاعدة البيانات غير متوفر بعد.');
+  }
+  return config;
 }
 
 function isLegacyJwtKey(value) {
@@ -25,10 +46,13 @@ function isLegacyJwtKey(value) {
 
 export function supabaseAdminHeaders(adminKey, extra = {}) {
   const headers = { ...extra, apikey: adminKey };
-  // New sb_secret_ keys must be sent only as apikey. Legacy service_role keys are JWTs
-  // and need the Authorization header to establish the service_role database role.
   if (isLegacyJwtKey(adminKey)) headers.Authorization = `Bearer ${adminKey}`;
   return headers;
+}
+
+export function supabaseUserHeaders(apiKey, accessToken, extra = {}) {
+  if (!accessToken) throw new MarketplaceApiError(401, 'AUTH_REQUIRED', 'سجّل الدخول أولًا.');
+  return { ...extra, apikey: apiKey, Authorization: `Bearer ${accessToken}` };
 }
 
 async function readResponse(response) {
@@ -42,14 +66,18 @@ async function readResponse(response) {
   return body;
 }
 
-export async function authenticateSupabaseRequest(req, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = config(environment);
+function requestAccessToken(req) {
   const authorization = req.headers?.authorization || req.get?.('authorization') || '';
-  const match = /^Bearer\s+(.+)$/i.exec(authorization);
-  if (!match) throw new MarketplaceApiError(401, 'AUTH_REQUIRED', 'سجّل الدخول أولًا.');
+  return /^Bearer\s+(.+)$/i.exec(authorization)?.[1] || '';
+}
+
+export async function authenticateSupabaseRequest(req, environment = process.env, fetchImpl = fetch) {
+  const { url, clientKey } = userConfig(environment);
+  const accessToken = requestAccessToken(req);
+  if (!accessToken) throw new MarketplaceApiError(401, 'AUTH_REQUIRED', 'سجّل الدخول أولًا.');
 
   const response = await fetchImpl(`${url}/auth/v1/user`, {
-    headers: { apikey: adminKey, Authorization: `Bearer ${match[1]}` },
+    headers: supabaseUserHeaders(clientKey, accessToken),
   });
   if (response.status === 401 || response.status === 403) {
     throw new MarketplaceApiError(401, 'INVALID_SESSION', 'انتهت جلسة الدخول. سجّل الدخول من جديد.');
@@ -74,8 +102,8 @@ export function normalizeOrderItems(items) {
   });
 }
 
-export async function createMarketplaceOrder({ buyerId, paymentMethod, shippingAddress, items }, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = config(environment);
+export async function createMarketplaceOrder({ buyerId, accessToken, paymentMethod, shippingAddress, items }, environment = process.env, fetchImpl = fetch) {
+  const { url, clientKey } = userConfig(environment);
   const normalized = normalizeOrderItems(items);
   const method = String(paymentMethod || '').toLowerCase();
   if (!['cash_on_delivery', 'hyperpay', 'card'].includes(method)) {
@@ -83,7 +111,7 @@ export async function createMarketplaceOrder({ buyerId, paymentMethod, shippingA
   }
   const response = await fetchImpl(`${url}/rest/v1/rpc/button_create_order`, {
     method: 'POST',
-    headers: supabaseAdminHeaders(adminKey, jsonHeaders),
+    headers: supabaseUserHeaders(clientKey, accessToken, jsonHeaders),
     body: JSON.stringify({
       p_buyer_id: buyerId,
       p_payment_method: method,
@@ -93,11 +121,11 @@ export async function createMarketplaceOrder({ buyerId, paymentMethod, shippingA
   });
   const id = await readResponse(response);
   if (!id || typeof id !== 'string') throw new MarketplaceApiError(502, 'INVALID_ORDER_RESPONSE', 'تم رفض استجابة إنشاء الطلب.');
-  return getMarketplaceOrder(id, buyerId, environment, fetchImpl);
+  return getMarketplaceOrder(id, buyerId, accessToken, environment, fetchImpl);
 }
 
-export async function getMarketplaceOrder(orderId, buyerId, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = config(environment);
+export async function getMarketplaceOrder(orderId, buyerId, accessToken, environment = process.env, fetchImpl = fetch) {
+  const { url, clientKey } = userConfig(environment);
   if (!/^[0-9a-f-]{36}$/i.test(String(orderId || ''))) throw new MarketplaceApiError(400, 'INVALID_ORDER_ID', 'رقم الطلب غير صالح.');
   const query = new URLSearchParams({
     select: 'id,buyer_id,total,currency,payment_method,payment_status,order_status,provider_reference,shipping_address,created_at,updated_at',
@@ -106,7 +134,7 @@ export async function getMarketplaceOrder(orderId, buyerId, environment = proces
     limit: '1',
   });
   const response = await fetchImpl(`${url}/rest/v1/orders?${query}`, {
-    headers: supabaseAdminHeaders(adminKey),
+    headers: supabaseUserHeaders(clientKey, accessToken),
   });
   const rows = await readResponse(response);
   if (!Array.isArray(rows) || !rows.length) throw new MarketplaceApiError(404, 'ORDER_NOT_FOUND', 'الطلب غير موجود.');
@@ -116,19 +144,20 @@ export async function getMarketplaceOrder(orderId, buyerId, environment = proces
     order: 'created_at.asc',
   });
   const itemResponse = await fetchImpl(`${url}/rest/v1/order_items?${itemQuery}`, {
-    headers: supabaseAdminHeaders(adminKey),
+    headers: supabaseUserHeaders(clientKey, accessToken),
   });
   const orderItems = await readResponse(itemResponse);
   return { ...rows[0], items: Array.isArray(orderItems) ? orderItems : [] };
 }
 
-export async function listBuyerOrders(buyerId, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = config(environment);
+export async function listBuyerOrders(buyerId, accessToken, environment = process.env, fetchImpl = fetch) {
+  const { url, clientKey } = userConfig(environment);
   const query = new URLSearchParams({
     select: 'id,buyer_id,total,currency,payment_method,payment_status,order_status,provider_reference,shipping_address,created_at,updated_at',
     buyer_id: `eq.${buyerId}`, order: 'created_at.desc', limit: '100',
   });
-  const response = await fetchImpl(`${url}/rest/v1/orders?${query}`, { headers: supabaseAdminHeaders(adminKey) });
+  const headers = supabaseUserHeaders(clientKey, accessToken);
+  const response = await fetchImpl(`${url}/rest/v1/orders?${query}`, { headers });
   const orders = await readResponse(response);
   if (!Array.isArray(orders) || !orders.length) return [];
   const ids = orders.map(order => order.id).filter(Boolean);
@@ -136,7 +165,7 @@ export async function listBuyerOrders(buyerId, environment = process.env, fetchI
     select: 'id,order_id,product_id,seller_id,quantity,unit_price,size,product_snapshot,created_at',
     order_id: `in.(${ids.join(',')})`, order: 'created_at.asc',
   });
-  const itemResponse = await fetchImpl(`${url}/rest/v1/order_items?${itemQuery}`, { headers: supabaseAdminHeaders(adminKey) });
+  const itemResponse = await fetchImpl(`${url}/rest/v1/order_items?${itemQuery}`, { headers });
   const items = await readResponse(itemResponse);
   const grouped = new Map();
   for (const item of Array.isArray(items) ? items : []) {
@@ -148,7 +177,7 @@ export async function listBuyerOrders(buyerId, environment = process.env, fetchI
     select: 'id,order_id,status,provider_reference,provider_result_code,attempt_count,processing_started_at,last_error,updated_at',
     order_id: `in.(${ids.join(',')})`, order: 'created_at.desc',
   });
-  const refundResponse = await fetchImpl(`${url}/rest/v1/refund_requests?${refundQuery}`, { headers: supabaseAdminHeaders(adminKey) });
+  const refundResponse = await fetchImpl(`${url}/rest/v1/refund_requests?${refundQuery}`, { headers });
   const refunds = await readResponse(refundResponse);
   const latestRefund = new Map();
   for (const refund of Array.isArray(refunds) ? refunds : []) {
@@ -158,28 +187,28 @@ export async function listBuyerOrders(buyerId, environment = process.env, fetchI
 }
 
 export async function listSellerOrders(accessToken, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = config(environment);
+  const { url, clientKey } = userConfig(environment);
   const response = await fetchImpl(`${url}/rest/v1/rpc/button_seller_orders`, {
-    method: 'POST', headers: { ...jsonHeaders, apikey: adminKey, Authorization: `Bearer ${accessToken}` }, body: '{}'
+    method: 'POST', headers: supabaseUserHeaders(clientKey, accessToken, jsonHeaders), body: '{}'
   });
   const rows = await readResponse(response);
   return Array.isArray(rows) ? rows : [];
 }
 
 export async function setSellerOrderStatus(accessToken, orderId, status, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = config(environment);
+  const { url, clientKey } = userConfig(environment);
   if (!/^[0-9a-f-]{36}$/i.test(String(orderId || ''))) throw new MarketplaceApiError(400, 'INVALID_ORDER_ID', 'رقم الطلب غير صالح.');
   const normalized = String(status || '').toLowerCase();
   if (!['confirmed','shipped','delivered','cancelled'].includes(normalized)) throw new MarketplaceApiError(400, 'INVALID_ORDER_STATUS', 'حالة الطلب غير صالحة.');
   const response = await fetchImpl(`${url}/rest/v1/rpc/button_seller_set_order_status`, {
-    method: 'POST', headers: { ...jsonHeaders, apikey: adminKey, Authorization: `Bearer ${accessToken}` },
+    method: 'POST', headers: supabaseUserHeaders(clientKey, accessToken, jsonHeaders),
     body: JSON.stringify({ p_order_id: orderId, p_status: normalized })
   });
   return readResponse(response);
 }
 
 export async function markOrderPayment(orderId, buyerId, providerReference, status, resultCode = null, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = config(environment);
+  const { url, adminKey } = adminConfig(environment);
   const normalized = String(status || '').toLowerCase();
   if (!['pending','paid','failed'].includes(normalized)) throw new MarketplaceApiError(400, 'INVALID_PAYMENT_STATUS', 'حالة الدفع غير صالحة.');
   const response = await fetchImpl(`${url}/rest/v1/rpc/button_set_order_payment_v2`, {
@@ -189,19 +218,19 @@ export async function markOrderPayment(orderId, buyerId, providerReference, stat
   return readResponse(response);
 }
 
-export async function cancelBuyerOrder(orderId, buyerId, reason = null, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = config(environment);
+export async function cancelBuyerOrder(orderId, buyerId, reason = null, accessToken, environment = process.env, fetchImpl = fetch) {
+  const { url, clientKey } = userConfig(environment);
   if (!/^[0-9a-f-]{36}$/i.test(String(orderId || ''))) throw new MarketplaceApiError(400, 'INVALID_ORDER_ID', 'رقم الطلب غير صالح.');
   const cleanReason = typeof reason === 'string' ? reason.trim().slice(0, 500) : null;
   const response = await fetchImpl(`${url}/rest/v1/rpc/button_buyer_cancel_order`, {
-    method: 'POST', headers: supabaseAdminHeaders(adminKey, jsonHeaders),
+    method: 'POST', headers: supabaseUserHeaders(clientKey, accessToken, jsonHeaders),
     body: JSON.stringify({ p_order_id: orderId, p_buyer_id: buyerId, p_reason: cleanReason || null })
   });
   return readResponse(response);
 }
 
 export async function getPendingRefund(orderId, buyerId, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = config(environment);
+  const { url, adminKey } = adminConfig(environment);
   const query = new URLSearchParams({ select:'id,order_id,buyer_id,amount,currency,status,provider_reference,provider_result_code,attempt_count,processing_started_at,last_error,reason,created_at,updated_at', order_id:`eq.${orderId}`, buyer_id:`eq.${buyerId}`, status:'in.(pending,processing)', order:'created_at.desc', limit:'1' });
   const response = await fetchImpl(`${url}/rest/v1/refund_requests?${query}`, { headers: supabaseAdminHeaders(adminKey) });
   const rows = await readResponse(response);
@@ -210,7 +239,7 @@ export async function getPendingRefund(orderId, buyerId, environment = process.e
 }
 
 export async function claimRefundProcessing(refundId, orderId, buyerId, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = config(environment);
+  const { url, adminKey } = adminConfig(environment);
   const response = await fetchImpl(`${url}/rest/v1/rpc/button_claim_refund_processing`, {
     method: 'POST', headers: supabaseAdminHeaders(adminKey, jsonHeaders),
     body: JSON.stringify({ p_refund_id: refundId, p_order_id: orderId, p_buyer_id: buyerId }),
@@ -219,7 +248,7 @@ export async function claimRefundProcessing(refundId, orderId, buyerId, environm
 }
 
 export async function recordRefundProcessing(refundId, orderId, buyerId, status, providerReference = null, resultCode = null, lastError = null, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = config(environment);
+  const { url, adminKey } = adminConfig(environment);
   const normalized = String(status || '').toLowerCase();
   if (!['pending', 'processing'].includes(normalized)) throw new MarketplaceApiError(400, 'INVALID_REFUND_STATUS', 'حالة الاسترداد غير صالحة.');
   const response = await fetchImpl(`${url}/rest/v1/rpc/button_record_refund_processing`, {
@@ -233,7 +262,7 @@ export async function recordRefundProcessing(refundId, orderId, buyerId, status,
 }
 
 export async function finalizeRefundV2(refundId, orderId, buyerId, succeeded, providerReference, resultCode = null, environment = process.env, fetchImpl = fetch) {
-  const { url, adminKey } = config(environment);
+  const { url, adminKey } = adminConfig(environment);
   const response = await fetchImpl(`${url}/rest/v1/rpc/button_finalize_refund_v2`, {
     method: 'POST', headers: supabaseAdminHeaders(adminKey, jsonHeaders),
     body: JSON.stringify({
