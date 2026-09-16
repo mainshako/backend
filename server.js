@@ -7,6 +7,7 @@ import rateLimit from 'express-rate-limit';
 import { pathToFileURL } from 'node:url';
 import { createCorsOptions } from './src/config/cors.js';
 import { createMarketplaceSupabaseRouter } from './src/routes/marketplace-supabase.js';
+import { marketplaceConfiguration } from './src/services/supabase-marketplace.js';
 
 export function createApp(environment = process.env) {
   const app = express();
@@ -23,18 +24,22 @@ export function createApp(environment = process.env) {
     message: { error: 'Too many requests, please try again later', code: 'RATE_LIMITED' },
   }));
 
-  const marketplaceConfigured = () => Boolean(environment.SUPABASE_URL && (environment.SUPABASE_SECRET_KEY || environment.SUPABASE_SERVICE_ROLE_KEY));
-  const healthPayload = () => ({
-    ok: true,
-    service: 'button-marketplace',
-    marketplaceConfigured: marketplaceConfigured(),
-    paymentProvider: String(environment.PAYMENT_PROVIDER || 'disabled').toLowerCase(),
-  });
+  const healthPayload = () => {
+    const configuration = marketplaceConfiguration(environment);
+    return {
+      ok: true,
+      service: 'button-marketplace',
+      marketplaceConfigured: configuration.marketplaceConfigured,
+      marketplaceAdminConfigured: configuration.marketplaceAdminConfigured,
+      paymentProvider: String(environment.PAYMENT_PROVIDER || 'disabled').toLowerCase(),
+    };
+  };
   app.get('/health', (_req, res) => res.json(healthPayload()));
   app.get('/api/health', (_req, res) => res.json(healthPayload()));
   const readyHandler = (_req, res) => {
-    const ready = marketplaceConfigured();
-    res.status(ready ? 200 : 503).json({ ...healthPayload(), ok: ready, ready });
+    const payload = healthPayload();
+    const ready = payload.marketplaceConfigured;
+    res.status(ready ? 200 : 503).json({ ...payload, ok: ready, ready });
   };
   app.get('/ready', readyHandler);
   app.get('/api/ready', readyHandler);
@@ -57,10 +62,10 @@ export const app = createApp();
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const PORT = process.env.PORT || 3000;
-  const configured = Boolean(process.env.SUPABASE_URL && (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY));
+  const configuration = marketplaceConfiguration(process.env);
   const paymentProvider = String(process.env.PAYMENT_PROVIDER || 'disabled').toLowerCase();
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Button marketplace server running on port ${PORT}`);
-    console.log(`Button readiness: marketplaceConfigured=${configured} paymentProvider=${paymentProvider}`);
+    console.log(`Button readiness: marketplaceConfigured=${configuration.marketplaceConfigured} marketplaceAdminConfigured=${configuration.marketplaceAdminConfigured} paymentProvider=${paymentProvider}`);
   });
 }
