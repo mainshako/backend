@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
-    "postinstall": "npm test"
+    "audit:report": "npm audit --json || true",
+    "postinstall": "npm test && npm run audit:report"
   },
   "engines": {
     "node": "22.x"
