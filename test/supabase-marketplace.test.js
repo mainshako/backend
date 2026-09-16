@@ -9,6 +9,7 @@ import {
   markOrderPayment,
   MarketplaceApiError,
 } from '../src/services/supabase-marketplace.js';
+import { assertElectronicOrderProviderReady } from '../src/routes/marketplace-supabase.js';
 
 test('marketplace works with publishable key even when admin secret is absent', () => {
   const config = marketplaceConfiguration({
@@ -72,6 +73,14 @@ test('payment mutation uses narrow backend RPC when service_role is absent', asy
   assert.equal(calls[0].options.headers.apikey, 'sb_publishable_test');
   assert.equal(calls[0].options.headers['x-button-backend-key'], 'server-only-secret');
   assert.equal(calls[0].options.headers.Authorization, undefined);
+});
+
+test('electronic order is rejected before stock reservation while provider is disabled', () => {
+  assert.throws(
+    () => assertElectronicOrderProviderReady('hyperpay', { PAYMENT_PROVIDER: 'disabled' }),
+    error => error?.code === 'PAYMENT_PROVIDER_DISABLED' && error?.statusCode === 503,
+  );
+  assert.equal(assertElectronicOrderProviderReady('cash_on_delivery', { PAYMENT_PROVIDER: 'disabled' }), 'cash_on_delivery');
 });
 
 test('modern secret key is not copied into Authorization header', () => {
