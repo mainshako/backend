@@ -10,6 +10,7 @@ import {
   MarketplaceApiError,
 } from '../src/services/supabase-marketplace.js';
 import { assertElectronicOrderProviderReady } from '../src/routes/marketplace-supabase.js';
+import { probeMarketplaceAdmin } from '../server.js';
 
 test('marketplace works with publishable key even when admin secret is absent', () => {
   const config = marketplaceConfiguration({
@@ -114,5 +115,31 @@ test('order normalization rejects invalid quantities and accepts aliases', () =>
   assert.throws(
     () => normalizeOrderItems([{ product_id: 12, quantity: 0 }]),
     error => error instanceof MarketplaceApiError && error.code === 'INVALID_ITEM',
+  );
+});
+
+test('privileged readiness probe validates shared-secret bridge end to end', async () => {
+  const calls = [];
+  const result = await probeMarketplaceAdmin({
+    SUPABASE_URL: 'https://example.supabase.co',
+    SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+    BUTTON_BACKEND_SHARED_SECRET: 'server-only-secret',
+  }, async (url, options = {}) => {
+    calls.push({ url, options });
+    return new Response('true', { status: 200, headers: { 'Content-Type': 'application/json' } });
+  });
+  assert.deepEqual(result, { reachable: true, mode: 'shared_secret' });
+  assert.match(calls[0].url, /\/rpc\/button_backend_ping$/);
+  assert.equal(calls[0].options.headers['x-button-backend-key'], 'server-only-secret');
+});
+
+test('privileged readiness probe fails closed on rejected shared secret', async () => {
+  await assert.rejects(
+    () => probeMarketplaceAdmin({
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+      BUTTON_BACKEND_SHARED_SECRET: 'wrong-secret',
+    }, async () => new Response('{"message":"forbidden"}', { status: 403, headers: { 'Content-Type': 'application/json' } })),
+    /shared_secret_http_403/,
   );
 });
