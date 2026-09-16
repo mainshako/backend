@@ -114,8 +114,10 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
   router.post('/orders', async (req, res) => {
     try {
       const user = await authenticateSupabaseRequest(req, environment);
+      const accessToken = authorizationToken(req);
       const order = await createMarketplaceOrder({
         buyerId: user.id,
+        accessToken,
         paymentMethod: req.body?.paymentMethod,
         shippingAddress: req.body?.shippingAddress,
         items: req.body?.items,
@@ -127,7 +129,7 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
   router.get('/orders', async (req, res) => {
     try {
       const user = await authenticateSupabaseRequest(req, environment);
-      const orders = await listBuyerOrders(user.id, environment);
+      const orders = await listBuyerOrders(user.id, authorizationToken(req), environment);
       res.json({ orders });
     } catch (error) { marketplaceErrorResponse(error, res); }
   });
@@ -135,7 +137,7 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
   router.get('/orders/:id', async (req, res) => {
     try {
       const user = await authenticateSupabaseRequest(req, environment);
-      const order = await getMarketplaceOrder(req.params.id, user.id, environment);
+      const order = await getMarketplaceOrder(req.params.id, user.id, authorizationToken(req), environment);
       res.json({ order });
     } catch (error) { marketplaceErrorResponse(error, res); }
   });
@@ -159,10 +161,11 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
   router.post('/orders/:id/cancel', async (req, res) => {
     try {
       const user = await authenticateSupabaseRequest(req, environment);
-      const result = await cancelBuyerOrder(req.params.id, user.id, req.body?.reason, environment);
+      const accessToken = authorizationToken(req);
+      const result = await cancelBuyerOrder(req.params.id, user.id, req.body?.reason, accessToken, environment);
       if (result !== 'refund_required') return res.json({ ok: true, status: result });
 
-      const order = await getMarketplaceOrder(req.params.id, user.id, environment);
+      const order = await getMarketplaceOrder(req.params.id, user.id, accessToken, environment);
       try {
         const refundResult = await processElectronicRefund(order, user.id, environment);
         return res.status(refundResult.httpStatus).json({
@@ -186,7 +189,7 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
   router.post('/orders/:id/refund/process', async (req, res) => {
     try {
       const user = await authenticateSupabaseRequest(req, environment);
-      const order = await getMarketplaceOrder(req.params.id, user.id, environment);
+      const order = await getMarketplaceOrder(req.params.id, user.id, authorizationToken(req), environment);
       const result = await processElectronicRefund(order, user.id, environment);
       res.status(result.httpStatus).json(result.body);
     } catch (error) { marketplaceErrorResponse(error, res); }
@@ -195,7 +198,7 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
   router.post('/orders/:id/payment', async (req, res) => {
     try {
       const user = await authenticateSupabaseRequest(req, environment);
-      const order = await getMarketplaceOrder(req.params.id, user.id, environment);
+      const order = await getMarketplaceOrder(req.params.id, user.id, authorizationToken(req), environment);
       if (!['hyperpay', 'card'].includes(order.payment_method)) throw new MarketplaceApiError(400, 'ORDER_NOT_ELECTRONIC', 'هذا الطلب لا يستخدم الدفع الإلكتروني.');
       if (order.payment_status === 'paid') return res.json({ paid: true, order });
       if (order.payment_status === 'pending' && order.provider_reference) return res.json({ paid: false, checkoutId: order.provider_reference, reused: true });
@@ -209,7 +212,7 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
   router.post('/orders/:id/payment/verify', async (req, res) => {
     try {
       const user = await authenticateSupabaseRequest(req, environment);
-      const order = await getMarketplaceOrder(req.params.id, user.id, environment);
+      const order = await getMarketplaceOrder(req.params.id, user.id, authorizationToken(req), environment);
       if (order.payment_status === 'paid') return res.json({ paid: true, order });
       const checkoutId = String(req.body?.checkoutId || order.provider_reference || '');
       if (order.provider_reference && checkoutId !== order.provider_reference) throw new MarketplaceApiError(400, 'PAYMENT_REFERENCE_MISMATCH', 'مرجع الدفع لا يطابق الطلب.');
