@@ -20,6 +20,20 @@ function authorizationToken(req) {
   return /^Bearer\s+(.+)$/i.exec(req.headers.authorization || '')?.[1] || '';
 }
 
+export function assertElectronicOrderProviderReady(paymentMethod, environment = process.env) {
+  const method = String(paymentMethod || '').trim().toLowerCase();
+  if (!['hyperpay', 'card'].includes(method)) return method;
+  const provider = getPaymentProvider(environment);
+  if (!provider.ready) {
+    throw new PaymentProviderError(
+      'PAYMENT_PROVIDER_DISABLED',
+      'الدفع الإلكتروني غير مفعّل حاليًا. لم يتم إنشاء الطلب ولم يتم حجز المخزون.',
+      503,
+    );
+  }
+  return method;
+}
+
 export function marketplaceErrorResponse(error, res) {
   console.error('Button marketplace request failed:', error);
   const statusCode = Number(error?.statusCode);
@@ -115,10 +129,11 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
     try {
       const user = await authenticateSupabaseRequest(req, environment);
       const accessToken = authorizationToken(req);
+      const paymentMethod = assertElectronicOrderProviderReady(req.body?.paymentMethod, environment);
       const order = await createMarketplaceOrder({
         buyerId: user.id,
         accessToken,
-        paymentMethod: req.body?.paymentMethod,
+        paymentMethod,
         shippingAddress: req.body?.shippingAddress,
         items: req.body?.items,
       }, environment);
