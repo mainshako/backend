@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "postinstall": "npm test"
   },
   "engines": {
     "node": "22.x"
