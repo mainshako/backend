@@ -10,7 +10,7 @@ import {
   MarketplaceApiError,
 } from '../src/services/supabase-marketplace.js';
 import { assertElectronicOrderProviderReady } from '../src/routes/marketplace-supabase.js';
-import { probeMarketplaceAdmin } from '../server.js';
+import { probeMarketplaceAdmin } from '../src/services/readiness.js';
 
 test('marketplace works with publishable key even when admin secret is absent', () => {
   const config = marketplaceConfiguration({
