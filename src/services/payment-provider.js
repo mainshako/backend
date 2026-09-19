@@ -5,11 +5,13 @@ export class PaymentProviderError extends Error {
 const unavailable = (name,code,message) => Object.freeze({name,ready:false,createPayment:async()=>{throw new PaymentProviderError(code,message)},verifyPayment:async()=>{throw new PaymentProviderError(code,message)},refundPayment:async()=>{throw new PaymentProviderError(code,message)}});
 const SUCCESS_RESULT = /^(000\.000\.|000\.100\.1|000\.[36])/;
 const PENDING_RESULT = /^(000\.200)/;
+const HYPERPAY_SANDBOX_ORIGIN = 'https://eu-test.oppwa.com';
 function hyperPayProvider(env, fetchImpl=fetch) {
-  const base=(env.HYPERPAY_BASE_URL || 'https://eu-test.oppwa.com').replace(/\/$/,'');
+  const base=(env.HYPERPAY_BASE_URL || HYPERPAY_SANDBOX_ORIGIN).replace(/\/$/,'');
   const token=env.HYPERPAY_ACCESS_TOKEN || '';
   const entityId=env.HYPERPAY_ENTITY_ID || '';
   const enabled=String(env.HYPERPAY_ENABLED||'').toLowerCase()==='true';
+  if (base !== HYPERPAY_SANDBOX_ORIGIN) return unavailable('hyperpay','HYPERPAY_SANDBOX_REQUIRED','HyperPay مقيد حاليًا ببيئة Sandbox فقط. لم يتم إرسال أي طلب دفع.');
   if (!enabled || !token || !entityId) return unavailable('hyperpay','HYPERPAY_NOT_CONFIGURED','HyperPay غير مفعّل أو بيانات الربط غير مكتملة. لم يتم خصم أي مبلغ.');
   const request=async(url,options={})=>{ const r=await fetchImpl(url,{...options,headers:{Authorization:`Bearer ${token}`,...options.headers}}); let b; try{b=await r.json()}catch{b=null} if(!r.ok||!b) throw new PaymentProviderError('HYPERPAY_REQUEST_FAILED','تعذر الاتصال ببوابة الدفع.',502); return b; };
   return Object.freeze({ name:'hyperpay', ready:true,
