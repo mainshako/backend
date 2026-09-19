@@ -22,7 +22,10 @@ function authorizationToken(req) {
 
 export function assertElectronicOrderProviderReady(paymentMethod, environment = process.env) {
   const method = String(paymentMethod || '').trim().toLowerCase();
-  if (!['hyperpay', 'card'].includes(method)) return method;
+  if (!['cash_on_delivery', 'hyperpay', 'card'].includes(method)) {
+    throw new MarketplaceApiError(400, 'INVALID_PAYMENT_METHOD', 'طريقة الدفع غير مدعومة.');
+  }
+  if (method === 'cash_on_delivery') return method;
   const provider = getPaymentProvider(environment);
   if (!provider.ready) {
     throw new PaymentProviderError(
