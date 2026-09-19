@@ -51,4 +51,4 @@ test('cash on delivery remains usable without backend shared secret', async () =
     },
   );
   assert.equal(calls[0].options.headers['x-button-backend-key'], undefined);
-}
+});
