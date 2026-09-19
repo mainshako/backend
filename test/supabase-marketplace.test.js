@@ -9,7 +9,7 @@ import {
   markOrderPayment,
   MarketplaceApiError,
 } from '../src/services/supabase-marketplace.js';
-import { assertElectronicOrderProviderReady } from '../src/routes/marketplace-supabase.js';
+import { assertElectronicOrder, assertElectronicOrderProviderReady } from '../src/routes/marketplace-supabase.js';
 import { probeMarketplaceAdmin } from '../src/services/readiness.js';
 
 test('marketplace works with publishable key even when admin secret is absent', () => {
@@ -82,6 +82,15 @@ test('electronic order is rejected before stock reservation while provider is di
     error => error?.code === 'PAYMENT_PROVIDER_DISABLED' && error?.statusCode === 503,
   );
   assert.equal(assertElectronicOrderProviderReady('cash_on_delivery', { PAYMENT_PROVIDER: 'disabled' }), 'cash_on_delivery');
+});
+
+test('payment endpoints reject non-electronic orders before provider verification', () => {
+  const electronic = { payment_method: 'hyperpay' };
+  assert.equal(assertElectronicOrder(electronic), electronic);
+  assert.throws(
+    () => assertElectronicOrder({ payment_method: 'cash_on_delivery', payment_status: 'paid' }),
+    error => error instanceof MarketplaceApiError && error.code === 'ORDER_NOT_ELECTRONIC' && error.statusCode === 400,
+  );
 });
 
 test('modern secret key is not copied into Authorization header', () => {
