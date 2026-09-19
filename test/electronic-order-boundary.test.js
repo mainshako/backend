@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMarketplaceOrder, MarketplaceApiError } from '../src/services/supabase-marketplace.js';
+import { assertElectronicOrderProviderReady } from '../src/routes/marketplace-supabase.js';
+import { PaymentProviderError } from '../src/services/payment-provider.js';
 
 const buyerId = '11111111-1111-1111-1111-111111111111';
 const orderId = '22222222-2222-2222-2222-222222222222';
@@ -51,4 +53,29 @@ test('cash on delivery remains usable without backend shared secret', async () =
     },
   );
   assert.equal(calls[0].options.headers['x-button-backend-key'], undefined);
+});
+
+test('order boundary rejects unsupported payment methods before order creation', () => {
+  const env = {
+    PAYMENT_PROVIDER: 'hyperpay',
+    HYPERPAY_ENABLED: 'true',
+    HYPERPAY_ACCESS_TOKEN: 'sandbox-token',
+    HYPERPAY_ENTITY_ID: 'sandbox-entity',
+  };
+  for (const method of ['', 'paypal', 'crypto', 'bank_transfer', 'fake_success']) {
+    assert.throws(
+      () => assertElectronicOrderProviderReady(method, env),
+      error => error instanceof MarketplaceApiError && error.code === 'INVALID_PAYMENT_METHOD' && error.statusCode === 400,
+    );
+  }
+});
+
+test('electronic order boundary fails closed while payment provider is disabled', () => {
+  for (const method of ['hyperpay', 'card']) {
+    assert.throws(
+      () => assertElectronicOrderProviderReady(method, { PAYMENT_PROVIDER: 'disabled' }),
+      error => error instanceof PaymentProviderError && error.code === 'PAYMENT_PROVIDER_DISABLED' && error.statusCode === 503,
+    );
+  }
+  assert.equal(assertElectronicOrderProviderReady('cash_on_delivery', { PAYMENT_PROVIDER: 'disabled' }), 'cash_on_delivery');
 });
