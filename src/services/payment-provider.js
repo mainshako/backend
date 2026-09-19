@@ -6,6 +6,13 @@ const unavailable = (name,code,message) => Object.freeze({name,ready:false,creat
 const SUCCESS_RESULT = /^(000\.000\.|000\.100\.1|000\.[36])/;
 const PENDING_RESULT = /^(000\.200)/;
 const HYPERPAY_SANDBOX_ORIGIN = 'https://eu-test.oppwa.com';
+const CURRENCY = /^[A-Z]{3}$/;
+const MERCHANT_TRANSACTION_ID = /^[A-Za-z0-9._-]{1,200}$/;
+function normalizedCurrency(currency) {
+  const value=String(currency||'').trim().toUpperCase();
+  if(!CURRENCY.test(value)) throw new PaymentProviderError('INVALID_PAYMENT_CURRENCY','عملة الدفع غير صالحة.',400);
+  return value;
+}
 function hyperPayProvider(env, fetchImpl=fetch) {
   const base=(env.HYPERPAY_BASE_URL || HYPERPAY_SANDBOX_ORIGIN).replace(/\/$/,'');
   const token=env.HYPERPAY_ACCESS_TOKEN || '';
@@ -17,7 +24,10 @@ function hyperPayProvider(env, fetchImpl=fetch) {
   return Object.freeze({ name:'hyperpay', ready:true,
     async createPayment({amount,currency='ILS',merchantTransactionId}) {
       const value=Number(amount); if(!Number.isFinite(value)||value<=0) throw new PaymentProviderError('INVALID_PAYMENT_AMOUNT','قيمة الدفع غير صالحة.',400);
-      const form=new URLSearchParams({entityId,amount:value.toFixed(2),currency,paymentType:'DB',merchantTransactionId:String(merchantTransactionId)});
+      const currencyCode=normalizedCurrency(currency);
+      const transactionId=String(merchantTransactionId||'').trim();
+      if(!MERCHANT_TRANSACTION_ID.test(transactionId)) throw new PaymentProviderError('INVALID_MERCHANT_TRANSACTION_ID','مرجع الطلب غير صالح للدفع.',400);
+      const form=new URLSearchParams({entityId,amount:value.toFixed(2),currency:currencyCode,paymentType:'DB',merchantTransactionId:transactionId});
       const body=await request(`${base}/v1/checkouts`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form});
       if(!body.id) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE','بوابة الدفع لم تُرجع جلسة دفع صالحة.',502);
       return {checkoutId:body.id, providerReference:body.id};
@@ -25,7 +35,8 @@ function hyperPayProvider(env, fetchImpl=fetch) {
     async refundPayment({paymentId,amount,currency='ILS'}) {
       if(!/^[A-Za-z0-9._-]{8,200}$/.test(String(paymentId||''))) throw new PaymentProviderError('INVALID_PAYMENT_ID','مرجع عملية الدفع غير صالح.',400);
       const value=Number(amount); if(!Number.isFinite(value)||value<=0) throw new PaymentProviderError('INVALID_REFUND_AMOUNT','قيمة الاسترداد غير صالحة.',400);
-      const form=new URLSearchParams({entityId,amount:value.toFixed(2),currency,paymentType:'RF'});
+      const currencyCode=normalizedCurrency(currency);
+      const form=new URLSearchParams({entityId,amount:value.toFixed(2),currency:currencyCode,paymentType:'RF'});
       const body=await request(`${base}/v1/payments/${encodeURIComponent(paymentId)}`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form});
       const code=String(body?.result?.code||'');
       return { succeeded:SUCCESS_RESULT.test(code), pending:PENDING_RESULT.test(code), resultCode:code, providerReference:body?.id||paymentId, rawStatus:body?.result?.description||'' };
