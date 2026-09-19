@@ -25,6 +25,17 @@ test('HyperPay remains unavailable unless explicitly enabled with complete crede
   }
 });
 
+test('HyperPay is sandbox-only until production payment launch is explicitly implemented', async () => {
+  for (const baseUrl of ['https://oppwa.com', 'https://eu-prod.oppwa.com', 'https://evil.example']) {
+    const provider = getPaymentProvider({ ...configured, HYPERPAY_BASE_URL: baseUrl }, async () => { throw new Error('network must not be called'); });
+    assert.equal(provider.ready, false);
+    await assert.rejects(
+      () => provider.createPayment({ amount: 10, merchantTransactionId: 'order-1' }),
+      error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_SANDBOX_REQUIRED',
+    );
+  }
+});
+
 test('HyperPay checkout creation sends server credentials and never reports payment success', async () => {
   const calls = [];
   const provider = getPaymentProvider(configured, async (url, options = {}) => {
