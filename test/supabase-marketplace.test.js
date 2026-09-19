@@ -84,6 +84,15 @@ test('electronic order is rejected before stock reservation while provider is di
   assert.equal(assertElectronicOrderProviderReady('cash_on_delivery', { PAYMENT_PROVIDER: 'disabled' }), 'cash_on_delivery');
 });
 
+test('unsupported payment methods are rejected at the API boundary', () => {
+  for (const method of ['', 'crypto', 'paypal', 'bank_transfer']) {
+    assert.throws(
+      () => assertElectronicOrderProviderReady(method, { PAYMENT_PROVIDER: 'disabled' }),
+      error => error instanceof MarketplaceApiError && error.code === 'INVALID_PAYMENT_METHOD' && error.statusCode === 400,
+    );
+  }
+});
+
 test('payment endpoints reject non-electronic orders before provider verification', () => {
   const electronic = { payment_method: 'hyperpay' };
   assert.equal(assertElectronicOrder(electronic), electronic);
