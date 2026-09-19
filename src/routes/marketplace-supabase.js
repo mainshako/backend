@@ -34,6 +34,13 @@ export function assertElectronicOrderProviderReady(paymentMethod, environment = 
   return method;
 }
 
+export function assertElectronicOrder(order) {
+  if (!['hyperpay', 'card'].includes(String(order?.payment_method || '').trim().toLowerCase())) {
+    throw new MarketplaceApiError(400, 'ORDER_NOT_ELECTRONIC', 'هذا الطلب لا يستخدم الدفع الإلكتروني.');
+  }
+  return order;
+}
+
 export function marketplaceErrorResponse(error, res) {
   console.error('Button marketplace request failed:', error);
   const statusCode = Number(error?.statusCode);
@@ -45,7 +52,8 @@ export function marketplaceErrorResponse(error, res) {
 }
 
 async function processElectronicRefund(order, userId, environment) {
-  if (order.payment_status !== 'paid' || !['hyperpay', 'card'].includes(order.payment_method)) {
+  assertElectronicOrder(order);
+  if (order.payment_status !== 'paid') {
     throw new MarketplaceApiError(400, 'ORDER_NOT_REFUNDABLE', 'الطلب غير مؤهل للاسترداد الإلكتروني.');
   }
 
@@ -213,8 +221,7 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
   router.post('/orders/:id/payment', async (req, res) => {
     try {
       const user = await authenticateSupabaseRequest(req, environment);
-      const order = await getMarketplaceOrder(req.params.id, user.id, authorizationToken(req), environment);
-      if (!['hyperpay', 'card'].includes(order.payment_method)) throw new MarketplaceApiError(400, 'ORDER_NOT_ELECTRONIC', 'هذا الطلب لا يستخدم الدفع الإلكتروني.');
+      const order = assertElectronicOrder(await getMarketplaceOrder(req.params.id, user.id, authorizationToken(req), environment));
       if (['cancelled', 'refunded'].includes(order.order_status)) throw new MarketplaceApiError(409, 'ORDER_NOT_PAYABLE', 'هذا الطلب ملغي أو مسترد ولا يمكن بدء دفعة جديدة له.');
       if (order.payment_status === 'paid') return res.json({ paid: true, order });
       if (order.payment_status === 'pending' && order.provider_reference) return res.json({ paid: false, checkoutId: order.provider_reference, reused: true });
@@ -229,7 +236,7 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
     try {
       const user = await authenticateSupabaseRequest(req, environment);
       const accessToken = authorizationToken(req);
-      const order = await getMarketplaceOrder(req.params.id, user.id, accessToken, environment);
+      const order = assertElectronicOrder(await getMarketplaceOrder(req.params.id, user.id, accessToken, environment));
       if (order.payment_status === 'paid') return res.json({ paid: true, order });
       const checkoutId = String(req.body?.checkoutId || order.provider_reference || '');
       if (order.provider_reference && checkoutId !== order.provider_reference) throw new MarketplaceApiError(400, 'PAYMENT_REFERENCE_MISMATCH', 'مرجع الدفع لا يطابق الطلب.');
