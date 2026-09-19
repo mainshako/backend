@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMarketplaceOrder, MarketplaceApiError } from '../src/services/supabase-marketplace.js';
-import { assertElectronicOrderProviderReady } from '../src/routes/marketplace-supabase.js';
+import { assertElectronicOrderProviderReady, assertElectronicOrder } from '../src/routes/marketplace-supabase.js';
 import { PaymentProviderError } from '../src/services/payment-provider.js';
 
 const buyerId = '11111111-1111-1111-1111-111111111111';
@@ -78,4 +78,16 @@ test('electronic order boundary fails closed while payment provider is disabled'
     );
   }
   assert.equal(assertElectronicOrderProviderReady('cash_on_delivery', { PAYMENT_PROVIDER: 'disabled' }), 'cash_on_delivery');
+});
+
+test('payment and refund endpoints only accept electronic orders', () => {
+  assert.equal(assertElectronicOrder({ payment_method: 'hyperpay' }).payment_method, 'hyperpay');
+  assert.equal(assertElectronicOrder({ payment_method: 'CARD' }).payment_method, 'CARD');
+
+  for (const payment_method of ['', 'cash_on_delivery', 'paypal', 'crypto', 'fake_success']) {
+    assert.throws(
+      () => assertElectronicOrder({ payment_method }),
+      error => error instanceof MarketplaceApiError && error.code === 'ORDER_NOT_ELECTRONIC' && error.statusCode === 400,
+    );
+  }
 });
