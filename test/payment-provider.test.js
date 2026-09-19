@@ -51,6 +51,19 @@ test('HyperPay checkout creation sends server credentials and never reports paym
   assert.equal('paid' in result, false);
 });
 
+test('HyperPay rejects oversized provider responses before parsing them', async () => {
+  for (const response of [
+    new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json', 'Content-Length': String(300 * 1024) } }),
+    new Response(JSON.stringify({ padding: 'x'.repeat(300 * 1024) }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+  ]) {
+    const provider = getPaymentProvider(configured, async () => response);
+    await assert.rejects(
+      () => provider.createPayment({ amount: 10, merchantTransactionId: 'order-1' }),
+      error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_RESPONSE_TOO_LARGE' && error.statusCode === 502,
+    );
+  }
+});
+
 test('HyperPay rejects malformed currency and transaction ids before network access', async () => {
   const provider = getPaymentProvider(configured, async () => { throw new Error('network must not be called'); });
   for (const [input, code] of [
