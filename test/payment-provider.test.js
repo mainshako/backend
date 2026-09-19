@@ -51,6 +51,24 @@ test('HyperPay checkout creation sends server credentials and never reports paym
   assert.equal('paid' in result, false);
 });
 
+test('HyperPay rejects malformed currency and transaction ids before network access', async () => {
+  const provider = getPaymentProvider(configured, async () => { throw new Error('network must not be called'); });
+  for (const [input, code] of [
+    [{ amount: 10, currency: 'ILS&paymentType=RF', merchantTransactionId: 'order-1' }, 'INVALID_PAYMENT_CURRENCY'],
+    [{ amount: 10, currency: 'ILS', merchantTransactionId: '../order/1' }, 'INVALID_MERCHANT_TRANSACTION_ID'],
+    [{ amount: 10, currency: 'ILS', merchantTransactionId: '' }, 'INVALID_MERCHANT_TRANSACTION_ID'],
+  ]) {
+    await assert.rejects(
+      () => provider.createPayment(input),
+      error => error instanceof PaymentProviderError && error.code === code && error.statusCode === 400,
+    );
+  }
+  await assert.rejects(
+    () => provider.refundPayment({ paymentId: 'payment_12345678', amount: 10, currency: 'not-a-currency' }),
+    error => error instanceof PaymentProviderError && error.code === 'INVALID_PAYMENT_CURRENCY' && error.statusCode === 400,
+  );
+});
+
 test('HyperPay verification fails closed for unknown result codes', async () => {
   const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({
     id: 'payment_12345678',
