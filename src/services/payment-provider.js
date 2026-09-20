@@ -39,8 +39,9 @@ function hyperPayProvider(env, fetchImpl=fetch) {
       if(!MERCHANT_TRANSACTION_ID.test(transactionId)) throw new PaymentProviderError('INVALID_MERCHANT_TRANSACTION_ID','مرجع الطلب غير صالح للدفع.',400);
       const form=new URLSearchParams({entityId,amount:amountValue,currency:currencyCode,paymentType:'DB',merchantTransactionId:transactionId});
       const body=await request(`${base}/v1/checkouts`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form});
-      if(!body.id) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE','بوابة الدفع لم تُرجع جلسة دفع صالحة.',502);
-      return {checkoutId:body.id, providerReference:body.id};
+      const checkoutId=String(body?.id||'');
+      if(!PROVIDER_REFERENCE.test(checkoutId)) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE','بوابة الدفع لم تُرجع جلسة دفع صالحة.',502);
+      return {checkoutId, providerReference:checkoutId};
     },
     async refundPayment({paymentId,amount,currency='ILS'}) {
       if(!PROVIDER_REFERENCE.test(String(paymentId||''))) throw new PaymentProviderError('INVALID_PAYMENT_ID','مرجع عملية الدفع غير صالح.',400);
