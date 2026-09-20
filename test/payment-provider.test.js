@@ -51,6 +51,18 @@ test('HyperPay checkout creation sends server credentials and never reports paym
   assert.equal('paid' in result, false);
 });
 
+test('HyperPay rejects amounts that would round to a zero-value charge or refund before network access', async () => {
+  const provider = getPaymentProvider(configured, async () => { throw new Error('network must not be called'); });
+  await assert.rejects(
+    () => provider.createPayment({ amount: 0.001, currency: 'ILS', merchantTransactionId: 'order-1' }),
+    error => error instanceof PaymentProviderError && error.code === 'INVALID_PAYMENT_AMOUNT' && error.statusCode === 400,
+  );
+  await assert.rejects(
+    () => provider.refundPayment({ paymentId: 'payment_12345678', amount: 0.001, currency: 'ILS' }),
+    error => error instanceof PaymentProviderError && error.code === 'INVALID_REFUND_AMOUNT' && error.statusCode === 400,
+  );
+});
+
 test('HyperPay rejects oversized provider responses before parsing them', async () => {
   for (const response of [
     new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json', 'Content-Length': String(300 * 1024) } }),
