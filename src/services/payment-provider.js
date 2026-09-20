@@ -9,6 +9,7 @@ const HYPERPAY_SANDBOX_ORIGIN = 'https://eu-test.oppwa.com';
 const CURRENCY = /^[A-Z]{3}$/;
 const MERCHANT_TRANSACTION_ID = /^[A-Za-z0-9._-]{1,200}$/;
 const MAX_PROVIDER_RESPONSE_BYTES = 256 * 1024;
+const PROVIDER_REQUEST_TIMEOUT_MS = 15_000;
 function normalizedCurrency(currency) {
   const value=String(currency||'').trim().toUpperCase();
   if(!CURRENCY.test(value)) throw new PaymentProviderError('INVALID_PAYMENT_CURRENCY','عملة الدفع غير صالحة.',400);
@@ -28,7 +29,7 @@ function hyperPayProvider(env, fetchImpl=fetch) {
   const enabled=String(env.HYPERPAY_ENABLED||'').toLowerCase()==='true';
   if (base !== HYPERPAY_SANDBOX_ORIGIN) return unavailable('hyperpay','HYPERPAY_SANDBOX_REQUIRED','HyperPay مقيد حاليًا ببيئة Sandbox فقط. لم يتم إرسال أي طلب دفع.');
   if (!enabled || !token || !entityId) return unavailable('hyperpay','HYPERPAY_NOT_CONFIGURED','HyperPay غير مفعّل أو بيانات الربط غير مكتملة. لم يتم خصم أي مبلغ.');
-  const request=async(url,options={})=>{ const r=await fetchImpl(url,{...options,headers:{Authorization:`Bearer ${token}`,...options.headers}}); const contentLength=Number(r.headers?.get?.('content-length')); if(Number.isFinite(contentLength)&&contentLength>MAX_PROVIDER_RESPONSE_BYTES) throw new PaymentProviderError('HYPERPAY_RESPONSE_TOO_LARGE','استجابة بوابة الدفع أكبر من الحد الآمن.',502); let raw; try{raw=await r.text()}catch{raw=''} if(Buffer.byteLength(raw,'utf8')>MAX_PROVIDER_RESPONSE_BYTES) throw new PaymentProviderError('HYPERPAY_RESPONSE_TOO_LARGE','استجابة بوابة الدفع أكبر من الحد الآمن.',502); let b; try{b=JSON.parse(raw)}catch{b=null} if(!r.ok||!b) throw new PaymentProviderError('HYPERPAY_REQUEST_FAILED','تعذر الاتصال ببوابة الدفع.',502); return b; };
+  const request=async(url,options={})=>{ let r; try{r=await fetchImpl(url,{...options,signal:AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS),headers:{Authorization:`Bearer ${token}`,...options.headers}})}catch(error){if(error?.name==='TimeoutError'||error?.name==='AbortError') throw new PaymentProviderError('HYPERPAY_REQUEST_TIMEOUT','انتهت مهلة الاتصال ببوابة الدفع دون تأكيد أي عملية.',504); throw new PaymentProviderError('HYPERPAY_REQUEST_FAILED','تعذر الاتصال ببوابة الدفع.',502)} const contentLength=Number(r.headers?.get?.('content-length')); if(Number.isFinite(contentLength)&&contentLength>MAX_PROVIDER_RESPONSE_BYTES) throw new PaymentProviderError('HYPERPAY_RESPONSE_TOO_LARGE','استجابة بوابة الدفع أكبر من الحد الآمن.',502); let raw; try{raw=await r.text()}catch{raw=''} if(Buffer.byteLength(raw,'utf8')>MAX_PROVIDER_RESPONSE_BYTES) throw new PaymentProviderError('HYPERPAY_RESPONSE_TOO_LARGE','استجابة بوابة الدفع أكبر من الحد الآمن.',502); let b; try{b=JSON.parse(raw)}catch{b=null} if(!r.ok||!b) throw new PaymentProviderError('HYPERPAY_REQUEST_FAILED','تعذر الاتصال ببوابة الدفع.',502); return b; };
   return Object.freeze({ name:'hyperpay', ready:true,
     async createPayment({amount,currency='ILS',merchantTransactionId}) {
       const amountValue=normalizedAmount(amount,'INVALID_PAYMENT_AMOUNT','قيمة الدفع غير صالحة.');
