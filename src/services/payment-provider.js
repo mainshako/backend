@@ -14,6 +14,13 @@ function normalizedCurrency(currency) {
   if(!CURRENCY.test(value)) throw new PaymentProviderError('INVALID_PAYMENT_CURRENCY','عملة الدفع غير صالحة.',400);
   return value;
 }
+function normalizedAmount(amount, code, message) {
+  const value=Number(amount);
+  if(!Number.isFinite(value)||value<=0) throw new PaymentProviderError(code,message,400);
+  const fixed=value.toFixed(2);
+  if(Number(fixed)<=0) throw new PaymentProviderError(code,message,400);
+  return fixed;
+}
 function hyperPayProvider(env, fetchImpl=fetch) {
   const base=(env.HYPERPAY_BASE_URL || HYPERPAY_SANDBOX_ORIGIN).replace(/\/$/,'');
   const token=env.HYPERPAY_ACCESS_TOKEN || '';
@@ -24,20 +31,20 @@ function hyperPayProvider(env, fetchImpl=fetch) {
   const request=async(url,options={})=>{ const r=await fetchImpl(url,{...options,headers:{Authorization:`Bearer ${token}`,...options.headers}}); const contentLength=Number(r.headers?.get?.('content-length')); if(Number.isFinite(contentLength)&&contentLength>MAX_PROVIDER_RESPONSE_BYTES) throw new PaymentProviderError('HYPERPAY_RESPONSE_TOO_LARGE','استجابة بوابة الدفع أكبر من الحد الآمن.',502); let raw; try{raw=await r.text()}catch{raw=''} if(Buffer.byteLength(raw,'utf8')>MAX_PROVIDER_RESPONSE_BYTES) throw new PaymentProviderError('HYPERPAY_RESPONSE_TOO_LARGE','استجابة بوابة الدفع أكبر من الحد الآمن.',502); let b; try{b=JSON.parse(raw)}catch{b=null} if(!r.ok||!b) throw new PaymentProviderError('HYPERPAY_REQUEST_FAILED','تعذر الاتصال ببوابة الدفع.',502); return b; };
   return Object.freeze({ name:'hyperpay', ready:true,
     async createPayment({amount,currency='ILS',merchantTransactionId}) {
-      const value=Number(amount); if(!Number.isFinite(value)||value<=0) throw new PaymentProviderError('INVALID_PAYMENT_AMOUNT','قيمة الدفع غير صالحة.',400);
+      const amountValue=normalizedAmount(amount,'INVALID_PAYMENT_AMOUNT','قيمة الدفع غير صالحة.');
       const currencyCode=normalizedCurrency(currency);
       const transactionId=String(merchantTransactionId||'').trim();
       if(!MERCHANT_TRANSACTION_ID.test(transactionId)) throw new PaymentProviderError('INVALID_MERCHANT_TRANSACTION_ID','مرجع الطلب غير صالح للدفع.',400);
-      const form=new URLSearchParams({entityId,amount:value.toFixed(2),currency:currencyCode,paymentType:'DB',merchantTransactionId:transactionId});
+      const form=new URLSearchParams({entityId,amount:amountValue,currency:currencyCode,paymentType:'DB',merchantTransactionId:transactionId});
       const body=await request(`${base}/v1/checkouts`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form});
       if(!body.id) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE','بوابة الدفع لم تُرجع جلسة دفع صالحة.',502);
       return {checkoutId:body.id, providerReference:body.id};
     },
     async refundPayment({paymentId,amount,currency='ILS'}) {
       if(!/^[A-Za-z0-9._-]{8,200}$/.test(String(paymentId||''))) throw new PaymentProviderError('INVALID_PAYMENT_ID','مرجع عملية الدفع غير صالح.',400);
-      const value=Number(amount); if(!Number.isFinite(value)||value<=0) throw new PaymentProviderError('INVALID_REFUND_AMOUNT','قيمة الاسترداد غير صالحة.',400);
+      const amountValue=normalizedAmount(amount,'INVALID_REFUND_AMOUNT','قيمة الاسترداد غير صالحة.');
       const currencyCode=normalizedCurrency(currency);
-      const form=new URLSearchParams({entityId,amount:value.toFixed(2),currency:currencyCode,paymentType:'RF'});
+      const form=new URLSearchParams({entityId,amount:amountValue,currency:currencyCode,paymentType:'RF'});
       const body=await request(`${base}/v1/payments/${encodeURIComponent(paymentId)}`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form});
       const code=String(body?.result?.code||'');
       return { succeeded:SUCCESS_RESULT.test(code), pending:PENDING_RESULT.test(code), resultCode:code, providerReference:body?.id||paymentId, rawStatus:body?.result?.description||'' };
