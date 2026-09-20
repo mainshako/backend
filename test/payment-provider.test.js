@@ -119,6 +119,19 @@ test('HyperPay rejects malformed refund payment ids before network access', asyn
   }
 });
 
+test('HyperPay refund success requires a valid provider refund reference', async () => {
+  for (const id of [undefined, '', 'short', '../refund']) {
+    const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({
+      ...(id === undefined ? {} : { id }),
+      result: { code: '000.000.000', description: 'success' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    await assert.rejects(
+      () => provider.refundPayment({ paymentId: 'payment_12345678', amount: 10, currency: 'ILS' }),
+      error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_INVALID_RESPONSE' && error.statusCode === 502,
+    );
+  }
+});
+
 test('HyperPay verification fails closed for unknown result codes', async () => {
   const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({
     id: 'payment_12345678',
