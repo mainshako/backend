@@ -94,6 +94,16 @@ test('HyperPay rejects malformed currency and transaction ids before network acc
   );
 });
 
+test('HyperPay rejects malformed refund payment ids before network access', async () => {
+  const provider = getPaymentProvider(configured, async () => { throw new Error('network must not be called'); });
+  for (const paymentId of ['', '../payment/12345678', 'short', 'payment_12345678?amount=0']) {
+    await assert.rejects(
+      () => provider.refundPayment({ paymentId, amount: 10, currency: 'ILS' }),
+      error => error instanceof PaymentProviderError && error.code === 'INVALID_PAYMENT_ID' && error.statusCode === 400,
+    );
+  }
+});
+
 test('HyperPay verification fails closed for unknown result codes', async () => {
   const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({
     id: 'payment_12345678',
