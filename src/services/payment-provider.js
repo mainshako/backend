@@ -49,7 +49,9 @@ function hyperPayProvider(env, fetchImpl=fetch) {
       const form=new URLSearchParams({entityId,amount:amountValue,currency:currencyCode,paymentType:'RF'});
       const body=await request(`${base}/v1/payments/${encodeURIComponent(paymentId)}`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form});
       const code=String(body?.result?.code||'');
-      return { succeeded:SUCCESS_RESULT.test(code), pending:PENDING_RESULT.test(code), resultCode:code, providerReference:body?.id||paymentId, rawStatus:body?.result?.description||'' };
+      const providerReference=String(body?.id||'');
+      if(SUCCESS_RESULT.test(code) && !PROVIDER_REFERENCE.test(providerReference)) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE','بوابة الدفع أعادت نجاح استرداد دون مرجع عملية صالح؛ لم يتم تأكيد الاسترداد.',502);
+      return { succeeded:SUCCESS_RESULT.test(code), pending:PENDING_RESULT.test(code), resultCode:code, providerReference:providerReference||paymentId, rawStatus:body?.result?.description||'' };
     },
     async verifyPayment({checkoutId}) {
       if(!PROVIDER_REFERENCE.test(String(checkoutId||''))) throw new PaymentProviderError('INVALID_CHECKOUT_ID','معرّف عملية الدفع غير صالح.',400);
