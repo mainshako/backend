@@ -151,6 +151,19 @@ test('HyperPay verification only marks documented success pattern paid', async (
   assert.equal(result.pending, false);
 });
 
+test('HyperPay verification rejects success without a valid provider payment reference', async () => {
+  for (const id of [undefined, '', 'short', '../payment']) {
+    const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({
+      ...(id === undefined ? {} : { id }),
+      result: { code: '000.000.000', description: 'success' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    await assert.rejects(
+      () => provider.verifyPayment({ checkoutId: 'checkout_12345678' }),
+      error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_INVALID_RESPONSE' && error.statusCode === 502,
+    );
+  }
+});
+
 test('HyperPay rejects malformed checkout ids before network access', async () => {
   const provider = getPaymentProvider(configured, async () => { throw new Error('network must not be called'); });
   await assert.rejects(
