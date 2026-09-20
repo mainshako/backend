@@ -8,6 +8,7 @@ const PENDING_RESULT = /^(000\.200)/;
 const HYPERPAY_SANDBOX_ORIGIN = 'https://eu-test.oppwa.com';
 const CURRENCY = /^[A-Z]{3}$/;
 const MERCHANT_TRANSACTION_ID = /^[A-Za-z0-9._-]{1,200}$/;
+const PROVIDER_REFERENCE = /^[A-Za-z0-9._-]{8,200}$/;
 const MAX_PROVIDER_RESPONSE_BYTES = 256 * 1024;
 const PROVIDER_REQUEST_TIMEOUT_MS = 15_000;
 function normalizedCurrency(currency) {
@@ -42,7 +43,7 @@ function hyperPayProvider(env, fetchImpl=fetch) {
       return {checkoutId:body.id, providerReference:body.id};
     },
     async refundPayment({paymentId,amount,currency='ILS'}) {
-      if(!/^[A-Za-z0-9._-]{8,200}$/.test(String(paymentId||''))) throw new PaymentProviderError('INVALID_PAYMENT_ID','مرجع عملية الدفع غير صالح.',400);
+      if(!PROVIDER_REFERENCE.test(String(paymentId||''))) throw new PaymentProviderError('INVALID_PAYMENT_ID','مرجع عملية الدفع غير صالح.',400);
       const amountValue=normalizedAmount(amount,'INVALID_REFUND_AMOUNT','قيمة الاسترداد غير صالحة.');
       const currencyCode=normalizedCurrency(currency);
       const form=new URLSearchParams({entityId,amount:amountValue,currency:currencyCode,paymentType:'RF'});
@@ -51,10 +52,12 @@ function hyperPayProvider(env, fetchImpl=fetch) {
       return { succeeded:SUCCESS_RESULT.test(code), pending:PENDING_RESULT.test(code), resultCode:code, providerReference:body?.id||paymentId, rawStatus:body?.result?.description||'' };
     },
     async verifyPayment({checkoutId}) {
-      if(!/^[A-Za-z0-9._-]{8,200}$/.test(String(checkoutId||''))) throw new PaymentProviderError('INVALID_CHECKOUT_ID','معرّف عملية الدفع غير صالح.',400);
+      if(!PROVIDER_REFERENCE.test(String(checkoutId||''))) throw new PaymentProviderError('INVALID_CHECKOUT_ID','معرّف عملية الدفع غير صالح.',400);
       const body=await request(`${base}/v1/checkouts/${encodeURIComponent(checkoutId)}/payment?entityId=${encodeURIComponent(entityId)}`);
       const code=String(body?.result?.code||'');
-      return { paid:SUCCESS_RESULT.test(code), pending:PENDING_RESULT.test(code), resultCode:code, providerReference:body?.id||checkoutId, rawStatus:body?.result?.description||'' };
+      const providerReference=String(body?.id||'');
+      if(SUCCESS_RESULT.test(code) && !PROVIDER_REFERENCE.test(providerReference)) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE','بوابة الدفع أعادت نجاحًا دون مرجع عملية صالح؛ لم يتم تأكيد الدفع.',502);
+      return { paid:SUCCESS_RESULT.test(code), pending:PENDING_RESULT.test(code), resultCode:code, providerReference:providerReference||checkoutId, rawStatus:body?.result?.description||'' };
     }
   });
 }
