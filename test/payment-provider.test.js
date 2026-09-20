@@ -18,10 +18,7 @@ test('HyperPay remains unavailable unless explicitly enabled with complete crede
   ]) {
     const provider = getPaymentProvider(env, async () => { throw new Error('network must not be called'); });
     assert.equal(provider.ready, false);
-    await assert.rejects(
-      () => provider.createPayment({ amount: 10, merchantTransactionId: 'order-1' }),
-      error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_NOT_CONFIGURED',
-    );
+    await assert.rejects(() => provider.createPayment({ amount: 10, merchantTransactionId: 'order-1' }), error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_NOT_CONFIGURED');
   }
 });
 
@@ -29,10 +26,7 @@ test('HyperPay is sandbox-only until production payment launch is explicitly imp
   for (const baseUrl of ['https://oppwa.com', 'https://eu-prod.oppwa.com', 'https://evil.example']) {
     const provider = getPaymentProvider({ ...configured, HYPERPAY_BASE_URL: baseUrl }, async () => { throw new Error('network must not be called'); });
     assert.equal(provider.ready, false);
-    await assert.rejects(
-      () => provider.createPayment({ amount: 10, merchantTransactionId: 'order-1' }),
-      error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_SANDBOX_REQUIRED',
-    );
+    await assert.rejects(() => provider.createPayment({ amount: 10, merchantTransactionId: 'order-1' }), error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_SANDBOX_REQUIRED');
   }
 });
 
@@ -52,135 +46,80 @@ test('HyperPay checkout creation sends server credentials and never reports paym
   assert.equal('paid' in result, false);
 });
 
-test('HyperPay network and timeout failures fail closed without reporting payment success', async () => {
-  for (const [failure, expectedCode, expectedStatus] of [
-    [new Error('socket reset'), 'HYPERPAY_REQUEST_FAILED', 502],
-    [Object.assign(new Error('timed out'), { name: 'TimeoutError' }), 'HYPERPAY_REQUEST_TIMEOUT', 504],
-    [Object.assign(new Error('aborted'), { name: 'AbortError' }), 'HYPERPAY_REQUEST_TIMEOUT', 504],
-  ]) {
-    const provider = getPaymentProvider(configured, async () => { throw failure; });
+test('HyperPay checkout creation rejects malformed provider references', async () => {
+  for (const id of [undefined, '', 'short', '../checkout', 'checkout_12345678?paid=true']) {
+    const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify(id === undefined ? {} : { id }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     await assert.rejects(
       () => provider.createPayment({ amount: 10, currency: 'ILS', merchantTransactionId: 'order-1' }),
-      error => error instanceof PaymentProviderError && error.code === expectedCode && error.statusCode === expectedStatus,
+      error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_INVALID_RESPONSE' && error.statusCode === 502,
     );
+  }
+});
+
+test('HyperPay network and timeout failures fail closed without reporting payment success', async () => {
+  for (const [failure, expectedCode, expectedStatus] of [[new Error('socket reset'), 'HYPERPAY_REQUEST_FAILED', 502],[Object.assign(new Error('timed out'), { name: 'TimeoutError' }), 'HYPERPAY_REQUEST_TIMEOUT', 504],[Object.assign(new Error('aborted'), { name: 'AbortError' }), 'HYPERPAY_REQUEST_TIMEOUT', 504]]) {
+    const provider = getPaymentProvider(configured, async () => { throw failure; });
+    await assert.rejects(() => provider.createPayment({ amount: 10, currency: 'ILS', merchantTransactionId: 'order-1' }), error => error instanceof PaymentProviderError && error.code === expectedCode && error.statusCode === expectedStatus);
   }
 });
 
 test('HyperPay rejects amounts that would round to a zero-value charge or refund before network access', async () => {
   const provider = getPaymentProvider(configured, async () => { throw new Error('network must not be called'); });
-  await assert.rejects(
-    () => provider.createPayment({ amount: 0.001, currency: 'ILS', merchantTransactionId: 'order-1' }),
-    error => error instanceof PaymentProviderError && error.code === 'INVALID_PAYMENT_AMOUNT' && error.statusCode === 400,
-  );
-  await assert.rejects(
-    () => provider.refundPayment({ paymentId: 'payment_12345678', amount: 0.001, currency: 'ILS' }),
-    error => error instanceof PaymentProviderError && error.code === 'INVALID_REFUND_AMOUNT' && error.statusCode === 400,
-  );
+  await assert.rejects(() => provider.createPayment({ amount: 0.001, currency: 'ILS', merchantTransactionId: 'order-1' }), error => error instanceof PaymentProviderError && error.code === 'INVALID_PAYMENT_AMOUNT' && error.statusCode === 400);
+  await assert.rejects(() => provider.refundPayment({ paymentId: 'payment_12345678', amount: 0.001, currency: 'ILS' }), error => error instanceof PaymentProviderError && error.code === 'INVALID_REFUND_AMOUNT' && error.statusCode === 400);
 });
 
 test('HyperPay rejects oversized provider responses before parsing them', async () => {
-  for (const response of [
-    new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json', 'Content-Length': String(300 * 1024) } }),
-    new Response(JSON.stringify({ padding: 'x'.repeat(300 * 1024) }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
-  ]) {
+  for (const response of [new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json', 'Content-Length': String(300 * 1024) } }),new Response(JSON.stringify({ padding: 'x'.repeat(300 * 1024) }), { status: 200, headers: { 'Content-Type': 'application/json' } })]) {
     const provider = getPaymentProvider(configured, async () => response);
-    await assert.rejects(
-      () => provider.createPayment({ amount: 10, merchantTransactionId: 'order-1' }),
-      error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_RESPONSE_TOO_LARGE' && error.statusCode === 502,
-    );
+    await assert.rejects(() => provider.createPayment({ amount: 10, merchantTransactionId: 'order-1' }), error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_RESPONSE_TOO_LARGE' && error.statusCode === 502);
   }
 });
 
 test('HyperPay rejects malformed currency and transaction ids before network access', async () => {
   const provider = getPaymentProvider(configured, async () => { throw new Error('network must not be called'); });
-  for (const [input, code] of [
-    [{ amount: 10, currency: 'ILS&paymentType=RF', merchantTransactionId: 'order-1' }, 'INVALID_PAYMENT_CURRENCY'],
-    [{ amount: 10, currency: 'ILS', merchantTransactionId: '../order/1' }, 'INVALID_MERCHANT_TRANSACTION_ID'],
-    [{ amount: 10, currency: 'ILS', merchantTransactionId: '' }, 'INVALID_MERCHANT_TRANSACTION_ID'],
-  ]) {
-    await assert.rejects(
-      () => provider.createPayment(input),
-      error => error instanceof PaymentProviderError && error.code === code && error.statusCode === 400,
-    );
+  for (const [input, code] of [[{ amount: 10, currency: 'ILS&paymentType=RF', merchantTransactionId: 'order-1' }, 'INVALID_PAYMENT_CURRENCY'],[{ amount: 10, currency: 'ILS', merchantTransactionId: '../order/1' }, 'INVALID_MERCHANT_TRANSACTION_ID'],[{ amount: 10, currency: 'ILS', merchantTransactionId: '' }, 'INVALID_MERCHANT_TRANSACTION_ID']]) {
+    await assert.rejects(() => provider.createPayment(input), error => error instanceof PaymentProviderError && error.code === code && error.statusCode === 400);
   }
-  await assert.rejects(
-    () => provider.refundPayment({ paymentId: 'payment_12345678', amount: 10, currency: 'not-a-currency' }),
-    error => error instanceof PaymentProviderError && error.code === 'INVALID_PAYMENT_CURRENCY' && error.statusCode === 400,
-  );
+  await assert.rejects(() => provider.refundPayment({ paymentId: 'payment_12345678', amount: 10, currency: 'not-a-currency' }), error => error instanceof PaymentProviderError && error.code === 'INVALID_PAYMENT_CURRENCY' && error.statusCode === 400);
 });
 
 test('HyperPay rejects malformed refund payment ids before network access', async () => {
   const provider = getPaymentProvider(configured, async () => { throw new Error('network must not be called'); });
-  for (const paymentId of ['', '../payment/12345678', 'short', 'payment_12345678?amount=0']) {
-    await assert.rejects(
-      () => provider.refundPayment({ paymentId, amount: 10, currency: 'ILS' }),
-      error => error instanceof PaymentProviderError && error.code === 'INVALID_PAYMENT_ID' && error.statusCode === 400,
-    );
-  }
+  for (const paymentId of ['', '../payment/12345678', 'short', 'payment_12345678?amount=0']) await assert.rejects(() => provider.refundPayment({ paymentId, amount: 10, currency: 'ILS' }), error => error instanceof PaymentProviderError && error.code === 'INVALID_PAYMENT_ID' && error.statusCode === 400);
 });
 
 test('HyperPay refund success requires a valid provider refund reference', async () => {
   for (const id of [undefined, '', 'short', '../refund']) {
-    const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({
-      ...(id === undefined ? {} : { id }),
-      result: { code: '000.000.000', description: 'success' },
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-    await assert.rejects(
-      () => provider.refundPayment({ paymentId: 'payment_12345678', amount: 10, currency: 'ILS' }),
-      error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_INVALID_RESPONSE' && error.statusCode === 502,
-    );
+    const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({ ...(id === undefined ? {} : { id }), result: { code: '000.000.000', description: 'success' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    await assert.rejects(() => provider.refundPayment({ paymentId: 'payment_12345678', amount: 10, currency: 'ILS' }), error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_INVALID_RESPONSE' && error.statusCode === 502);
   }
 });
 
 test('HyperPay verification fails closed for unknown result codes', async () => {
-  const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({
-    id: 'payment_12345678',
-    result: { code: '999.999.999', description: 'unknown' },
-  }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({ id: 'payment_12345678', result: { code: '999.999.999', description: 'unknown' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
   const result = await provider.verifyPayment({ checkoutId: 'checkout_12345678' });
-  assert.equal(result.paid, false);
-  assert.equal(result.pending, false);
-  assert.equal(result.resultCode, '999.999.999');
-  assert.equal(result.providerReference, 'payment_12345678');
+  assert.equal(result.paid, false); assert.equal(result.pending, false); assert.equal(result.resultCode, '999.999.999'); assert.equal(result.providerReference, 'payment_12345678');
 });
 
 test('HyperPay verification recognizes pending without marking paid', async () => {
-  const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({
-    id: 'payment_12345678',
-    result: { code: '000.200.000', description: 'pending' },
-  }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-  const result = await provider.verifyPayment({ checkoutId: 'checkout_12345678' });
-  assert.equal(result.paid, false);
-  assert.equal(result.pending, true);
+  const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({ id: 'payment_12345678', result: { code: '000.200.000', description: 'pending' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  const result = await provider.verifyPayment({ checkoutId: 'checkout_12345678' }); assert.equal(result.paid, false); assert.equal(result.pending, true);
 });
 
 test('HyperPay verification only marks documented success pattern paid', async () => {
-  const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({
-    id: 'payment_12345678',
-    result: { code: '000.000.000', description: 'success' },
-  }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-  const result = await provider.verifyPayment({ checkoutId: 'checkout_12345678' });
-  assert.equal(result.paid, true);
-  assert.equal(result.pending, false);
+  const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({ id: 'payment_12345678', result: { code: '000.000.000', description: 'success' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  const result = await provider.verifyPayment({ checkoutId: 'checkout_12345678' }); assert.equal(result.paid, true); assert.equal(result.pending, false);
 });
 
 test('HyperPay verification rejects success without a valid provider payment reference', async () => {
   for (const id of [undefined, '', 'short', '../payment']) {
-    const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({
-      ...(id === undefined ? {} : { id }),
-      result: { code: '000.000.000', description: 'success' },
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-    await assert.rejects(
-      () => provider.verifyPayment({ checkoutId: 'checkout_12345678' }),
-      error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_INVALID_RESPONSE' && error.statusCode === 502,
-    );
+    const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({ ...(id === undefined ? {} : { id }), result: { code: '000.000.000', description: 'success' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    await assert.rejects(() => provider.verifyPayment({ checkoutId: 'checkout_12345678' }), error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_INVALID_RESPONSE' && error.statusCode === 502);
   }
 });
 
 test('HyperPay rejects malformed checkout ids before network access', async () => {
   const provider = getPaymentProvider(configured, async () => { throw new Error('network must not be called'); });
-  await assert.rejects(
-    () => provider.verifyPayment({ checkoutId: '../bad' }),
-    error => error instanceof PaymentProviderError && error.code === 'INVALID_CHECKOUT_ID' && error.statusCode === 400,
-  );
+  await assert.rejects(() => provider.verifyPayment({ checkoutId: '../bad' }), error => error instanceof PaymentProviderError && error.code === 'INVALID_CHECKOUT_ID' && error.statusCode === 400);
 });
