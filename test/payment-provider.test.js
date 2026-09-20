@@ -46,9 +46,24 @@ test('HyperPay checkout creation sends server credentials and never reports paym
   assert.deepEqual(result, { checkoutId: 'checkout_12345678', providerReference: 'checkout_12345678' });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].options.headers.Authorization, 'Bearer sandbox-token');
+  assert.ok(calls[0].options.signal instanceof AbortSignal);
   assert.match(String(calls[0].options.body), /paymentType=DB/);
   assert.match(String(calls[0].options.body), /amount=12.50/);
   assert.equal('paid' in result, false);
+});
+
+test('HyperPay network and timeout failures fail closed without reporting payment success', async () => {
+  for (const [failure, expectedCode, expectedStatus] of [
+    [new Error('socket reset'), 'HYPERPAY_REQUEST_FAILED', 502],
+    [Object.assign(new Error('timed out'), { name: 'TimeoutError' }), 'HYPERPAY_REQUEST_TIMEOUT', 504],
+    [Object.assign(new Error('aborted'), { name: 'AbortError' }), 'HYPERPAY_REQUEST_TIMEOUT', 504],
+  ]) {
+    const provider = getPaymentProvider(configured, async () => { throw failure; });
+    await assert.rejects(
+      () => provider.createPayment({ amount: 10, currency: 'ILS', merchantTransactionId: 'order-1' }),
+      error => error instanceof PaymentProviderError && error.code === expectedCode && error.statusCode === expectedStatus,
+    );
+  }
 });
 
 test('HyperPay rejects amounts that would round to a zero-value charge or refund before network access', async () => {
