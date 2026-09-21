@@ -29,6 +29,11 @@ function validatedResultCode(body) {
   if(!RESULT_CODE.test(code)) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE','بوابة الدفع أعادت رمز نتيجة غير صالح؛ لم يتم تأكيد أي عملية.',502);
   return code;
 }
+function validatedOptionalProviderReference(body, { required=false, message='بوابة الدفع أعادت مرجع عملية غير صالح؛ لم يتم تأكيد أي عملية.' }={}) {
+  const reference=String(body?.id||'');
+  if((reference && !PROVIDER_REFERENCE.test(reference)) || (required && !reference)) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE',message,502);
+  return reference;
+}
 function hyperPayProvider(env, fetchImpl=fetch) {
   const base=(env.HYPERPAY_BASE_URL || HYPERPAY_SANDBOX_ORIGIN).replace(/\/$/,'');
   const token=env.HYPERPAY_ACCESS_TOKEN || '';
@@ -45,8 +50,7 @@ function hyperPayProvider(env, fetchImpl=fetch) {
       if(!MERCHANT_TRANSACTION_ID.test(transactionId)) throw new PaymentProviderError('INVALID_MERCHANT_TRANSACTION_ID','مرجع الطلب غير صالح للدفع.',400);
       const form=new URLSearchParams({entityId,amount:amountValue,currency:currencyCode,paymentType:'DB',merchantTransactionId:transactionId});
       const body=await request(`${base}/v1/checkouts`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form});
-      const checkoutId=String(body?.id||'');
-      if(!PROVIDER_REFERENCE.test(checkoutId)) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE','بوابة الدفع لم تُرجع جلسة دفع صالحة.',502);
+      const checkoutId=validatedOptionalProviderReference(body,{required:true,message:'بوابة الدفع لم تُرجع جلسة دفع صالحة.'});
       return {checkoutId, providerReference:checkoutId};
     },
     async refundPayment({paymentId,amount,currency='ILS'}) {
@@ -56,16 +60,14 @@ function hyperPayProvider(env, fetchImpl=fetch) {
       const form=new URLSearchParams({entityId,amount:amountValue,currency:currencyCode,paymentType:'RF'});
       const body=await request(`${base}/v1/payments/${encodeURIComponent(paymentId)}`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form});
       const code=validatedResultCode(body);
-      const providerReference=String(body?.id||'');
-      if(SUCCESS_RESULT.test(code) && !PROVIDER_REFERENCE.test(providerReference)) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE','بوابة الدفع أعادت نجاح استرداد دون مرجع عملية صالح؛ لم يتم تأكيد الاسترداد.',502);
+      const providerReference=validatedOptionalProviderReference(body,{required:SUCCESS_RESULT.test(code),message:'بوابة الدفع أعادت نجاح استرداد دون مرجع عملية صالح؛ لم يتم تأكيد الاسترداد.'});
       return { succeeded:SUCCESS_RESULT.test(code), pending:PENDING_RESULT.test(code), resultCode:code, providerReference:providerReference||paymentId, rawStatus:body?.result?.description||'' };
     },
     async verifyPayment({checkoutId}) {
       if(!PROVIDER_REFERENCE.test(String(checkoutId||''))) throw new PaymentProviderError('INVALID_CHECKOUT_ID','معرّف عملية الدفع غير صالح.',400);
       const body=await request(`${base}/v1/checkouts/${encodeURIComponent(checkoutId)}/payment?entityId=${encodeURIComponent(entityId)}`);
       const code=validatedResultCode(body);
-      const providerReference=String(body?.id||'');
-      if(SUCCESS_RESULT.test(code) && !PROVIDER_REFERENCE.test(providerReference)) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE','بوابة الدفع أعادت نجاحًا دون مرجع عملية صالح؛ لم يتم تأكيد الدفع.',502);
+      const providerReference=validatedOptionalProviderReference(body,{required:SUCCESS_RESULT.test(code),message:'بوابة الدفع أعادت نجاحًا دون مرجع عملية صالح؛ لم يتم تأكيد الدفع.'});
       return { paid:SUCCESS_RESULT.test(code), pending:PENDING_RESULT.test(code), resultCode:code, providerReference:providerReference||checkoutId, rawStatus:body?.result?.description||'' };
     }
   });
