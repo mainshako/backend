@@ -3,7 +3,7 @@ export class PaymentProviderError extends Error {
   constructor(code, message, statusCode = 503) { super(message); this.name='PaymentProviderError'; this.code=code; this.statusCode=statusCode; }
 }
 const unavailable = (name,code,message) => Object.freeze({name,ready:false,createPayment:async()=>{throw new PaymentProviderError(code,message)},verifyPayment:async()=>{throw new PaymentProviderError(code,message)},refundPayment:async()=>{throw new PaymentProviderError(code,message)}});
-const SUCCESS_RESULT = /^(000\.000\.|000\.100\.1|000\.[36])/;
+const SUCCESS_RESULT = /^(000\.000\.|000\.100\.1|000\.[36]00\.)/;
 const PENDING_RESULT = /^(000\.200)/;
 const RESULT_CODE = /^\d{3}\.\d{3}\.\d{3}$/;
 const HYPERPAY_SANDBOX_ORIGIN = 'https://eu-test.oppwa.com';
