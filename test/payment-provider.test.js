@@ -123,3 +123,13 @@ test('HyperPay rejects malformed checkout ids before network access', async () =
   const provider = getPaymentProvider(configured, async () => { throw new Error('network must not be called'); });
   await assert.rejects(() => provider.verifyPayment({ checkoutId: '../bad' }), error => error instanceof PaymentProviderError && error.code === 'INVALID_CHECKOUT_ID' && error.statusCode === 400);
 });
+
+test('HyperPay malformed result codes fail closed for verification and refunds', async () => {
+  for (const code of [undefined, '', '000.000', '000.000.0000', '000.000.000?paid=true', 'success']) {
+    const responseBody = { id: 'payment_12345678', result: code === undefined ? {} : { code, description: 'provider response' } };
+    const verifyProvider = getPaymentProvider(configured, async () => new Response(JSON.stringify(responseBody), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    await assert.rejects(() => verifyProvider.verifyPayment({ checkoutId: 'checkout_12345678' }), error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_INVALID_RESPONSE' && error.statusCode === 502);
+    const refundProvider = getPaymentProvider(configured, async () => new Response(JSON.stringify(responseBody), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    await assert.rejects(() => refundProvider.refundPayment({ paymentId: 'payment_12345678', amount: 10, currency: 'ILS' }), error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_INVALID_RESPONSE' && error.statusCode === 502);
+  }
+});
