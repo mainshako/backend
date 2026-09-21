@@ -43,6 +43,22 @@ test('electronic order is rejected before stock reservation while provider is di
   assert.equal(assertElectronicOrderProviderReady('cash_on_delivery',{PAYMENT_PROVIDER:'disabled'}),'cash_on_delivery');
 });
 
+test('electronic order is rejected before stock reservation when HyperPay lacks valid sandbox configuration', () => {
+  const unsafeConfigurations = [
+    { PAYMENT_PROVIDER:'hyperpay' },
+    { PAYMENT_PROVIDER:'hyperpay', HYPERPAY_ENABLED:'true' },
+    { PAYMENT_PROVIDER:'hyperpay', HYPERPAY_ENABLED:'true', HYPERPAY_ACCESS_TOKEN:'sandbox-token' },
+    { PAYMENT_PROVIDER:'hyperpay', HYPERPAY_ENABLED:'true', HYPERPAY_ACCESS_TOKEN:'sandbox-token', HYPERPAY_ENTITY_ID:'sandbox-entity', HYPERPAY_BASE_URL:'https://example.com' },
+  ];
+  for (const environment of unsafeConfigurations) {
+    assert.throws(
+      () => assertElectronicOrderProviderReady('hyperpay', environment),
+      error => error?.code === 'PAYMENT_PROVIDER_DISABLED' && error?.statusCode === 503,
+    );
+  }
+  assert.equal(assertElectronicOrderProviderReady('cash_on_delivery', unsafeConfigurations[0]), 'cash_on_delivery');
+});
+
 test('unsupported payment methods are rejected at the API boundary', () => {
   for (const method of ['', 'crypto', 'paypal', 'bank_transfer']) assert.throws(() => assertElectronicOrderProviderReady(method,{PAYMENT_PROVIDER:'disabled'}), error => error instanceof MarketplaceApiError && error.code==='INVALID_PAYMENT_METHOD' && error.statusCode===400);
 });
