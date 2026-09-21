@@ -50,6 +50,8 @@ function hyperPayProvider(env, fetchImpl=fetch) {
       if(!MERCHANT_TRANSACTION_ID.test(transactionId)) throw new PaymentProviderError('INVALID_MERCHANT_TRANSACTION_ID','مرجع الطلب غير صالح للدفع.',400);
       const form=new URLSearchParams({entityId,amount:amountValue,currency:currencyCode,paymentType:'DB',merchantTransactionId:transactionId});
       const body=await request(`${base}/v1/checkouts`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form});
+      const code=validatedResultCode(body);
+      if(!PENDING_RESULT.test(code)) throw new PaymentProviderError('HYPERPAY_CHECKOUT_REJECTED','بوابة الدفع لم تؤكد إنشاء جلسة دفع؛ لم يتم خصم أي مبلغ.',502);
       const checkoutId=validatedOptionalProviderReference(body,{required:true,message:'بوابة الدفع لم تُرجع جلسة دفع صالحة.'});
       return {checkoutId, providerReference:checkoutId};
     },
