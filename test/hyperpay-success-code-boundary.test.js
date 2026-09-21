@@ -30,11 +30,18 @@ test('HyperPay 000.3xx and 000.6xx codes outside documented 300/600 success fami
   }
 });
 
-test('HyperPay documented 300/600 success families remain accepted', async () => {
+test('HyperPay documented 300/600 success families remain accepted for payments and refunds', async () => {
   for (const code of ['000.300.000', '000.600.000']) {
-    const provider = getPaymentProvider(configured, async () => responseFor(code));
-    const result = await provider.verifyPayment({ checkoutId: 'checkout_12345678' });
-    assert.equal(result.paid, true, `${code} should remain a recognized success code`);
-    assert.equal(result.pending, false);
+    const paymentProvider = getPaymentProvider(configured, async () => responseFor(code));
+    const payment = await paymentProvider.verifyPayment({ checkoutId: 'checkout_12345678' });
+    assert.equal(payment.paid, true, `${code} should remain a recognized payment success code`);
+    assert.equal(payment.pending, false);
+    assert.equal(payment.providerReference, 'payment_12345678');
+
+    const refundProvider = getPaymentProvider(configured, async () => responseFor(code, 'refund_12345678'));
+    const refund = await refundProvider.refundPayment({ paymentId: 'payment_12345678', amount: 10, currency: 'ILS' });
+    assert.equal(refund.succeeded, true, `${code} should remain a recognized refund success code`);
+    assert.equal(refund.pending, false);
+    assert.equal(refund.providerReference, 'refund_12345678');
   }
 });
