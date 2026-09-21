@@ -102,6 +102,15 @@ test('HyperPay verification fails closed for unknown result codes', async () => 
   assert.equal(result.paid, false); assert.equal(result.pending, false); assert.equal(result.resultCode, '999.999.999'); assert.equal(result.providerReference, 'payment_12345678');
 });
 
+test('HyperPay refund fails closed for unknown result codes', async () => {
+  const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({ id: 'refund_12345678', result: { code: '999.999.999', description: 'unknown' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  const result = await provider.refundPayment({ paymentId: 'payment_12345678', amount: 10, currency: 'ILS' });
+  assert.equal(result.succeeded, false);
+  assert.equal(result.pending, false);
+  assert.equal(result.resultCode, '999.999.999');
+  assert.equal(result.providerReference, 'refund_12345678');
+});
+
 test('HyperPay verification recognizes pending without marking paid', async () => {
   const provider = getPaymentProvider(configured, async () => new Response(JSON.stringify({ id: 'payment_12345678', result: { code: '000.200.000', description: 'pending' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
   const result = await provider.verifyPayment({ checkoutId: 'checkout_12345678' }); assert.equal(result.paid, false); assert.equal(result.pending, true);
