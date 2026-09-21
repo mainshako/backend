@@ -13,6 +13,11 @@ const MERCHANT_TRANSACTION_ID = /^[A-Za-z0-9._-]{1,200}$/;
 const PROVIDER_REFERENCE = /^[A-Za-z0-9._-]{8,200}$/;
 const MAX_PROVIDER_RESPONSE_BYTES = 256 * 1024;
 const PROVIDER_REQUEST_TIMEOUT_MS = 15_000;
+export function assertValidProviderReference(reference, code='INVALID_CHECKOUT_ID', message='معرّف عملية الدفع غير صالح.') {
+  const value=String(reference||'');
+  if(!PROVIDER_REFERENCE.test(value)) throw new PaymentProviderError(code,message,400);
+  return value;
+}
 function normalizedCurrency(currency) {
   const value=String(currency||'').trim().toUpperCase();
   if(!CURRENCY.test(value)) throw new PaymentProviderError('INVALID_PAYMENT_CURRENCY','عملة الدفع غير صالحة.',400);
@@ -57,7 +62,7 @@ function hyperPayProvider(env, fetchImpl=fetch) {
       return {checkoutId, providerReference:checkoutId};
     },
     async refundPayment({paymentId,amount,currency='ILS'}) {
-      if(!PROVIDER_REFERENCE.test(String(paymentId||''))) throw new PaymentProviderError('INVALID_PAYMENT_ID','مرجع عملية الدفع غير صالح.',400);
+      assertValidProviderReference(paymentId,'INVALID_PAYMENT_ID','مرجع عملية الدفع غير صالح.');
       const amountValue=normalizedAmount(amount,'INVALID_REFUND_AMOUNT','قيمة الاسترداد غير صالحة.');
       const currencyCode=normalizedCurrency(currency);
       const form=new URLSearchParams({entityId,amount:amountValue,currency:currencyCode,paymentType:'RF'});
@@ -67,7 +72,7 @@ function hyperPayProvider(env, fetchImpl=fetch) {
       return { succeeded:SUCCESS_RESULT.test(code), pending:PENDING_RESULT.test(code), resultCode:code, providerReference:providerReference||paymentId, rawStatus:body?.result?.description||'' };
     },
     async verifyPayment({checkoutId}) {
-      if(!PROVIDER_REFERENCE.test(String(checkoutId||''))) throw new PaymentProviderError('INVALID_CHECKOUT_ID','معرّف عملية الدفع غير صالح.',400);
+      assertValidProviderReference(checkoutId);
       const body=await request(`${base}/v1/checkouts/${encodeURIComponent(checkoutId)}/payment?entityId=${encodeURIComponent(entityId)}`);
       const code=validatedResultCode(body);
       const providerReference=validatedOptionalProviderReference(body,{required:SUCCESS_RESULT.test(code),message:'بوابة الدفع أعادت نجاحًا دون مرجع عملية صالح؛ لم يتم تأكيد الدفع.'});
