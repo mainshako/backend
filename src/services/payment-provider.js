@@ -42,8 +42,8 @@ function validatedOptionalProviderReference(body, { required=false, message='ب�
 }
 function hyperPayProvider(env, fetchImpl=fetch) {
   const base=(env.HYPERPAY_BASE_URL || HYPERPAY_SANDBOX_ORIGIN).replace(/\/$/,'');
-  const token=env.HYPERPAY_ACCESS_TOKEN || '';
-  const entityId=env.HYPERPAY_ENTITY_ID || '';
+  const token=String(env.HYPERPAY_ACCESS_TOKEN || '').trim();
+  const entityId=String(env.HYPERPAY_ENTITY_ID || '').trim();
   const enabled=String(env.HYPERPAY_ENABLED||'').toLowerCase()==='true';
   if (base !== HYPERPAY_SANDBOX_ORIGIN) return unavailable('hyperpay','HYPERPAY_SANDBOX_REQUIRED','HyperPay مقيد حاليًا ببيئة Sandbox فقط. لم يتم إرسال أي طلب دفع.');
   if (!enabled || !token || !entityId) return unavailable('hyperpay','HYPERPAY_NOT_CONFIGURED','HyperPay غير مفعّل أو بيانات الربط غير مكتملة. لم يتم خصم أي مبلغ.');
