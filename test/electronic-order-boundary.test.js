@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMarketplaceOrder, MarketplaceApiError } from '../src/services/supabase-marketplace.js';
-import { assertElectronicOrderProviderReady, assertElectronicOrder } from '../src/routes/marketplace-supabase.js';
+import { assertElectronicOrderProviderReady, assertElectronicOrder, requirePaymentProvider } from '../src/routes/marketplace-supabase.js';
 import { PaymentProviderError } from '../src/services/payment-provider.js';
 
 const buyerId = '11111111-1111-1111-1111-111111111111';
@@ -78,6 +78,13 @@ test('electronic order boundary fails closed while payment provider is disabled'
     );
   }
   assert.equal(assertElectronicOrderProviderReady('cash_on_delivery', { PAYMENT_PROVIDER: 'disabled' }), 'cash_on_delivery');
+});
+
+test('existing electronic checkout cannot be reused while payment provider is disabled', () => {
+  assert.throws(
+    () => requirePaymentProvider({ PAYMENT_PROVIDER: 'disabled' }),
+    error => error instanceof PaymentProviderError && error.code === 'PAYMENT_PROVIDER_DISABLED' && error.statusCode === 503,
+  );
 });
 
 test('payment and refund endpoints only accept electronic orders', () => {
