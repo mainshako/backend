@@ -10,7 +10,11 @@ const checkoutResponse = (id='checkout_12345678', code='000.200.100') => ({id,re
 test('HyperPay remains unavailable unless explicitly enabled with complete credentials', async () => {
   for (const env of [{ ...configured, HYPERPAY_ENABLED: 'false' },{ ...configured, HYPERPAY_ACCESS_TOKEN: '' },{ ...configured, HYPERPAY_ENTITY_ID: '' }]) {
     const provider = getPaymentProvider(env, async () => { throw new Error('network must not be called'); }); assert.equal(provider.ready, false);
-    await assert.rejects(() => provider.createPayment({ amount: 10, merchantTransactionId: 'order-1' }), error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_NOT_CONFIGURED');
+    for (const operation of [
+      () => provider.createPayment({ amount: 10, merchantTransactionId: 'order-1' }),
+      () => provider.verifyPayment({ checkoutId: 'checkout_12345678' }),
+      () => provider.refundPayment({ paymentId: 'payment_12345678', amount: 10, currency: 'ILS' }),
+    ]) await assert.rejects(operation, error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_NOT_CONFIGURED');
   }
 });
 test('HyperPay is sandbox-only until production payment launch is explicitly implemented', async () => {
