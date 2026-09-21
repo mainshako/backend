@@ -5,6 +5,7 @@ export class PaymentProviderError extends Error {
 const unavailable = (name,code,message) => Object.freeze({name,ready:false,createPayment:async()=>{throw new PaymentProviderError(code,message)},verifyPayment:async()=>{throw new PaymentProviderError(code,message)},refundPayment:async()=>{throw new PaymentProviderError(code,message)}});
 const SUCCESS_RESULT = /^(000\.000\.|000\.100\.1|000\.[36]00\.)/;
 const PENDING_RESULT = /^(000\.200)/;
+const CHECKOUT_CREATED_RESULT = /^000\.200\.100$/;
 const RESULT_CODE = /^\d{3}\.\d{3}\.\d{3}$/;
 const HYPERPAY_SANDBOX_ORIGIN = 'https://eu-test.oppwa.com';
 const CURRENCY = /^[A-Z]{3}$/;
@@ -51,7 +52,7 @@ function hyperPayProvider(env, fetchImpl=fetch) {
       const form=new URLSearchParams({entityId,amount:amountValue,currency:currencyCode,paymentType:'DB',merchantTransactionId:transactionId});
       const body=await request(`${base}/v1/checkouts`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form});
       const code=validatedResultCode(body);
-      if(!PENDING_RESULT.test(code)) throw new PaymentProviderError('HYPERPAY_CHECKOUT_REJECTED','بوابة الدفع لم تؤكد إنشاء جلسة دفع؛ لم يتم خصم أي مبلغ.',502);
+      if(!CHECKOUT_CREATED_RESULT.test(code)) throw new PaymentProviderError('HYPERPAY_CHECKOUT_REJECTED','بوابة الدفع لم تؤكد إنشاء جلسة دفع؛ لم يتم خصم أي مبلغ.',502);
       const checkoutId=validatedOptionalProviderReference(body,{required:true,message:'بوابة الدفع لم تُرجع جلسة دفع صالحة.'});
       return {checkoutId, providerReference:checkoutId};
     },
