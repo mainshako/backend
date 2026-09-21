@@ -10,7 +10,13 @@ const configured = {
   HYPERPAY_BASE_URL: 'https://eu-test.oppwa.com',
 };
 
-test('HyperPay whitespace-only credentials fail closed before network access', async () => {
+const operations = [
+  provider => provider.createPayment({ amount: 10, currency: 'ILS', merchantTransactionId: 'order-1' }),
+  provider => provider.verifyPayment({ checkoutId: 'checkout-12345678' }),
+  provider => provider.refundPayment({ paymentId: 'payment-12345678', amount: 10, currency: 'ILS' }),
+];
+
+test('HyperPay whitespace-only credentials fail closed before network access across all payment operations', async () => {
   for (const env of [
     { ...configured, HYPERPAY_ACCESS_TOKEN: '   \t  ' },
     { ...configured, HYPERPAY_ENTITY_ID: '   \n  ' },
@@ -22,10 +28,12 @@ test('HyperPay whitespace-only credentials fail closed before network access', a
     });
 
     assert.equal(provider.ready, false);
-    await assert.rejects(
-      () => provider.createPayment({ amount: 10, currency: 'ILS', merchantTransactionId: 'order-1' }),
-      error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_NOT_CONFIGURED',
-    );
+    for (const operation of operations) {
+      await assert.rejects(
+        () => operation(provider),
+        error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_NOT_CONFIGURED',
+      );
+    }
     assert.equal(networkCalled, false);
   }
 });
