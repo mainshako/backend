@@ -60,7 +60,7 @@ function hyperPayProvider(env, fetchImpl=fetch) {
       if(!PROVIDER_REFERENCE.test(String(paymentId||''))) throw new PaymentProviderError('INVALID_PAYMENT_ID','مرجع عملية الدفع غير صالح.',400);
       const amountValue=normalizedAmount(amount,'INVALID_REFUND_AMOUNT','قيمة الاسترداد غير صالحة.');
       const currencyCode=normalizedCurrency(currency);
-      const form=new URLSearchParams({entityId,amount:amountValue,cURRENCY:currencyCode,paymentType:'RF'});
+      const form=new URLSearchParams({entityId,amount:amountValue,currency:currencyCode,paymentType:'RF'});
       const body=await request(`${base}/v1/payments/${encodeURIComponent(paymentId)}`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form});
       const code=validatedResultCode(body);
       const providerReference=validatedOptionalProviderReference(body,{required:SUCCESS_RESULT.test(code),message:'بوابة الدفع أعادت نجاح استرداد دون مرجع عملية صالح؛ لم يتم تأكيد الاسترداد.'});
