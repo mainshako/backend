@@ -20,20 +20,25 @@ function authorizationToken(req) {
   return /^Bearer\s+(.+)$/i.exec(req.headers.authorization || '')?.[1] || '';
 }
 
+export function requirePaymentProvider(environment = process.env) {
+  const provider = getPaymentProvider(environment);
+  if (!provider.ready) {
+    throw new PaymentProviderError(
+      'PAYMENT_PROVIDER_DISABLED',
+      'الدفع الإلكتروني غير مفعّل حاليًا.',
+      503,
+    );
+  }
+  return provider;
+}
+
 export function assertElectronicOrderProviderReady(paymentMethod, environment = process.env) {
   const method = String(paymentMethod || '').trim().toLowerCase();
   if (!['cash_on_delivery', 'hyperpay', 'card'].includes(method)) {
     throw new MarketplaceApiError(400, 'INVALID_PAYMENT_METHOD', 'طريقة الدفع غير مدعومة.');
   }
   if (method === 'cash_on_delivery') return method;
-  const provider = getPaymentProvider(environment);
-  if (!provider.ready) {
-    throw new PaymentProviderError(
-      'PAYMENT_PROVIDER_DISABLED',
-      'الدفع الإلكتروني غير مفعّل حاليًا. لم يتم إنشاء الطلب ولم يتم حجز المخزون.',
-      503,
-    );
-  }
+  requirePaymentProvider(environment);
   return method;
 }
 
@@ -227,8 +232,8 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
       const order = assertElectronicOrder(await getMarketplaceOrder(req.params.id, user.id, authorizationToken(req), environment));
       if (['cancelled', 'refunded'].includes(order.order_status)) throw new MarketplaceApiError(409, 'ORDER_NOT_PAYABLE', 'هذا الطلب ملغي أو مسترد ولا يمكن بدء دفعة جديدة له.');
       if (order.payment_status === 'paid') return res.json({ paid: true, order });
+      const provider = requirePaymentProvider(environment);
       if (order.payment_status === 'pending' && order.provider_reference) return res.json({ paid: false, checkoutId: order.provider_reference, reused: true });
-      const provider = getPaymentProvider(environment);
       const payment = await provider.createPayment({ amount: order.total, currency: order.currency, merchantTransactionId: order.id });
       await markOrderPayment(order.id, user.id, payment.providerReference, 'pending', null, environment);
       res.status(201).json({ paid: false, checkoutId: payment.checkoutId, reused: false });
