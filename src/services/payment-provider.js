@@ -5,6 +5,7 @@ export class PaymentProviderError extends Error {
 const unavailable = (name,code,message) => Object.freeze({name,ready:false,createPayment:async()=>{throw new PaymentProviderError(code,message)},verifyPayment:async()=>{throw new PaymentProviderError(code,message)},refundPayment:async()=>{throw new PaymentProviderError(code,message)}});
 const SUCCESS_RESULT = /^(000\.000\.|000\.100\.1|000\.[36])/;
 const PENDING_RESULT = /^(000\.200)/;
+const RESULT_CODE = /^\d{3}\.\d{3}\.\d{3}$/;
 const HYPERPAY_SANDBOX_ORIGIN = 'https://eu-test.oppwa.com';
 const CURRENCY = /^[A-Z]{3}$/;
 const MERCHANT_TRANSACTION_ID = /^[A-Za-z0-9._-]{1,200}$/;
@@ -22,6 +23,11 @@ function normalizedAmount(amount, code, message) {
   const fixed=value.toFixed(2);
   if(Number(fixed)<=0) throw new PaymentProviderError(code,message,400);
   return fixed;
+}
+function validatedResultCode(body) {
+  const code=String(body?.result?.code||'');
+  if(!RESULT_CODE.test(code)) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE','بوابة الدفع أعادت رمز نتيجة غير صالح؛ لم يتم تأكيد أي عملية.',502);
+  return code;
 }
 function hyperPayProvider(env, fetchImpl=fetch) {
   const base=(env.HYPERPAY_BASE_URL || HYPERPAY_SANDBOX_ORIGIN).replace(/\/$/,'');
@@ -49,7 +55,7 @@ function hyperPayProvider(env, fetchImpl=fetch) {
       const currencyCode=normalizedCurrency(currency);
       const form=new URLSearchParams({entityId,amount:amountValue,currency:currencyCode,paymentType:'RF'});
       const body=await request(`${base}/v1/payments/${encodeURIComponent(paymentId)}`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form});
-      const code=String(body?.result?.code||'');
+      const code=validatedResultCode(body);
       const providerReference=String(body?.id||'');
       if(SUCCESS_RESULT.test(code) && !PROVIDER_REFERENCE.test(providerReference)) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE','بوابة الدفع أعادت نجاح استرداد دون مرجع عملية صالح؛ لم يتم تأكيد الاسترداد.',502);
       return { succeeded:SUCCESS_RESULT.test(code), pending:PENDING_RESULT.test(code), resultCode:code, providerReference:providerReference||paymentId, rawStatus:body?.result?.description||'' };
@@ -57,7 +63,7 @@ function hyperPayProvider(env, fetchImpl=fetch) {
     async verifyPayment({checkoutId}) {
       if(!PROVIDER_REFERENCE.test(String(checkoutId||''))) throw new PaymentProviderError('INVALID_CHECKOUT_ID','معرّف عملية الدفع غير صالح.',400);
       const body=await request(`${base}/v1/checkouts/${encodeURIComponent(checkoutId)}/payment?entityId=${encodeURIComponent(entityId)}`);
-      const code=String(body?.result?.code||'');
+      const code=validatedResultCode(body);
       const providerReference=String(body?.id||'');
       if(SUCCESS_RESULT.test(code) && !PROVIDER_REFERENCE.test(providerReference)) throw new PaymentProviderError('HYPERPAY_INVALID_RESPONSE','بوابة الدفع أعادت نجاحًا دون مرجع عملية صالح؛ لم يتم تأكيد الدفع.',502);
       return { paid:SUCCESS_RESULT.test(code), pending:PENDING_RESULT.test(code), resultCode:code, providerReference:providerReference||checkoutId, rawStatus:body?.result?.description||'' };
