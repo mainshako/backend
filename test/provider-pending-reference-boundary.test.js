@@ -39,3 +39,25 @@ test('pending HyperPay refund never reports succeeded and preserves a valid prov
   assert.equal(result.pending, true);
   assert.equal(result.providerReference, 'refund_pending_123');
 });
+
+test('pending HyperPay responses with malformed provider references fail closed', async () => {
+  for (const id of ['bad ref', '../payment', 'short']) {
+    const verifyProvider = getPaymentProvider(env, jsonFetch({
+      id,
+      result: { code: '000.200.000', description: 'pending' }
+    }));
+    await assert.rejects(
+      verifyProvider.verifyPayment({ checkoutId: 'checkout_pending_123' }),
+      (error) => error?.code === 'HYPERPAY_INVALID_RESPONSE' && error?.statusCode === 502
+    );
+
+    const refundProvider = getPaymentProvider(env, jsonFetch({
+      id,
+      result: { code: '000.200.000', description: 'pending' }
+    }));
+    await assert.rejects(
+      refundProvider.refundPayment({ paymentId: 'payment_original_123', amount: 10, currency: 'ILS' }),
+      (error) => error?.code === 'HYPERPAY_INVALID_RESPONSE' && error?.statusCode === 502
+    );
+  }
+});
