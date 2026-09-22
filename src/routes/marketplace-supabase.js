@@ -49,6 +49,14 @@ export function assertElectronicOrder(order) {
   return order;
 }
 
+export function resolveStoredCheckoutReference(order, requestedCheckoutId) {
+  const stored = String(order?.provider_reference || '');
+  if (!stored) throw new MarketplaceApiError(409, 'PAYMENT_NOT_INITIALIZED', 'يجب إنشاء جلسة الدفع لهذا الطلب قبل التحقق منها.');
+  const requested = String(requestedCheckoutId || stored);
+  if (requested !== stored) throw new MarketplaceApiError(400, 'PAYMENT_REFERENCE_MISMATCH', 'مرجع الدفع لا يطابق الطلب.');
+  return stored;
+}
+
 export function marketplaceErrorResponse(error, res) {
   console.error('Button marketplace request failed:', error);
   const statusCode = Number(error?.statusCode);
@@ -93,49 +101,17 @@ async function processElectronicRefund(order, userId, environment) {
       currency: refund.currency,
     });
   } catch (error) {
-    await recordRefundProcessing(
-      refund.id,
-      order.id,
-      userId,
-      'processing',
-      null,
-      null,
-      error?.code || 'REFUND_PROVIDER_UNCERTAIN',
-      environment,
-    ).catch(() => {});
+    await recordRefundProcessing(refund.id, order.id, userId, 'processing', null, null, error?.code || 'REFUND_PROVIDER_UNCERTAIN', environment).catch(() => {});
     throw error;
   }
 
   if (result.pending) {
-    await recordRefundProcessing(
-      refund.id,
-      order.id,
-      userId,
-      'processing',
-      result.providerReference,
-      result.resultCode,
-      null,
-      environment,
-    );
-    return {
-      httpStatus: 202,
-      body: { ok: true, pending: true, status: 'processing', resultCode: result.resultCode },
-    };
+    await recordRefundProcessing(refund.id, order.id, userId, 'processing', result.providerReference, result.resultCode, null, environment);
+    return { httpStatus: 202, body: { ok: true, pending: true, status: 'processing', resultCode: result.resultCode } };
   }
 
-  const state = await finalizeRefundV2(
-    refund.id,
-    order.id,
-    userId,
-    result.succeeded,
-    result.providerReference,
-    result.resultCode,
-    environment,
-  );
-  return {
-    httpStatus: result.succeeded ? 200 : 502,
-    body: { ok: result.succeeded, refunded: result.succeeded, status: state, resultCode: result.resultCode },
-  };
+  const state = await finalizeRefundV2(refund.id, order.id, userId, result.succeeded, result.providerReference, result.resultCode, environment);
+  return { httpStatus: result.succeeded ? 200 : 502, body: { ok: result.succeeded, refunded: result.succeeded, status: state, resultCode: result.resultCode } };
 }
 
 export function createMarketplaceSupabaseRouter(environment = process.env) {
@@ -146,13 +122,7 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
       const user = await authenticateSupabaseRequest(req, environment);
       const accessToken = authorizationToken(req);
       const paymentMethod = assertElectronicOrderProviderReady(req.body?.paymentMethod, environment);
-      const order = await createMarketplaceOrder({
-        buyerId: user.id,
-        accessToken,
-        paymentMethod,
-        shippingAddress: req.body?.shippingAddress,
-        items: req.body?.items,
-      }, environment);
+      const order = await createMarketplaceOrder({ buyerId: user.id, accessToken, paymentMethod, shippingAddress: req.body?.shippingAddress, items: req.body?.items }, environment);
       res.status(201).json({ order });
     } catch (error) { marketplaceErrorResponse(error, res); }
   });
@@ -195,24 +165,13 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
       const accessToken = authorizationToken(req);
       const result = await cancelBuyerOrder(req.params.id, user.id, req.body?.reason, accessToken, environment);
       if (result !== 'refund_required') return res.json({ ok: true, status: result });
-
       const order = await getMarketplaceOrder(req.params.id, user.id, accessToken, environment);
       try {
         const refundResult = await processElectronicRefund(order, user.id, environment);
-        return res.status(refundResult.httpStatus).json({
-          ...refundResult.body,
-          cancellationStatus: 'refund_required',
-          message: refundResult.body.refunded
-            ? 'تم تأكيد الاسترداد وإلغاء الطلب بأمان.'
-            : (refundResult.body.message || 'تم تسجيل طلب الاسترداد بأمان. لن يعتبر المبلغ مستردًا قبل تأكيد بوابة الدفع.'),
-        });
+        return res.status(refundResult.httpStatus).json({ ...refundResult.body, cancellationStatus: 'refund_required', message: refundResult.body.refunded ? 'تم تأكيد الاسترداد وإلغاء الطلب بأمان.' : (refundResult.body.message || 'تم تسجيل طلب الاسترداد بأمان. لن يعتبر المبلغ مستردًا قبل تأكيد بوابة الدفع.') });
       } catch (refundError) {
         console.error('Refund provider status is uncertain after cancellation:', refundError);
-        return res.status(202).json({
-          ok: true, pending: true, status: 'processing', cancellationStatus: 'refund_required',
-          code: refundError?.code || 'REFUND_PROVIDER_UNCERTAIN',
-          message: 'تم حفظ طلب الاسترداد. تعذر تأكيد نتيجة البوابة الآن، لذلك بقي الطلب قيد المعالجة ولن نرسل استردادًا مكررًا تلقائيًا.',
-        });
+        return res.status(202).json({ ok: true, pending: true, status: 'processing', cancellationStatus: 'refund_required', code: refundError?.code || 'REFUND_PROVIDER_UNCERTAIN', message: 'تم حفظ طلب الاسترداد. تعذر تأكيد نتيجة البوابة الآن، لذلك بقي الطلب قيد المعالجة ولن نرسل استردادًا مكررًا تلقائيًا.' });
       }
     } catch (error) { marketplaceErrorResponse(error, res); }
   });
@@ -246,8 +205,7 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
       const accessToken = authorizationToken(req);
       const order = assertElectronicOrder(await getMarketplaceOrder(req.params.id, user.id, accessToken, environment));
       if (order.payment_status === 'paid') return res.json({ paid: true, order });
-      const checkoutId = String(req.body?.checkoutId || order.provider_reference || '');
-      if (order.provider_reference && checkoutId !== order.provider_reference) throw new MarketplaceApiError(400, 'PAYMENT_REFERENCE_MISMATCH', 'مرجع الدفع لا يطابق الطلب.');
+      const checkoutId = resolveStoredCheckoutReference(order, req.body?.checkoutId);
       const verification = await getPaymentProvider(environment).verifyPayment({ checkoutId });
       const status = verification.paid ? 'paid' : (verification.pending ? 'pending' : 'failed');
       const paymentState = await markOrderPayment(order.id, user.id, verification.providerReference, status, verification.resultCode, environment);
@@ -256,27 +214,10 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
         const paidCancelledOrder = await getMarketplaceOrder(order.id, user.id, accessToken, environment);
         try {
           const refundResult = await processElectronicRefund(paidCancelledOrder, user.id, environment);
-          return res.status(refundResult.httpStatus).json({
-            ...refundResult.body,
-            paid: true,
-            latePayment: true,
-            cancellationStatus: 'refund_required',
-            message: refundResult.body.refunded
-              ? 'وصل تأكيد الدفع بعد إلغاء الطلب، لذلك تم استرداد المبلغ تلقائيًا.'
-              : (refundResult.body.message || 'وصل تأكيد الدفع بعد إلغاء الطلب وتم تسجيل الاسترداد تلقائيًا.'),
-          });
+          return res.status(refundResult.httpStatus).json({ ...refundResult.body, paid: true, latePayment: true, cancellationStatus: 'refund_required', message: refundResult.body.refunded ? 'وصل تأكيد الدفع بعد إلغاء الطلب، لذلك تم استرداد المبلغ تلقائيًا.' : (refundResult.body.message || 'وصل تأكيد الدفع بعد إلغاء الطلب وتم تسجيل الاسترداد تلقائيًا.') });
         } catch (refundError) {
           console.error('Late payment refund status is uncertain:', refundError);
-          return res.status(202).json({
-            ok: true,
-            paid: true,
-            latePayment: true,
-            pending: true,
-            status: 'processing',
-            cancellationStatus: 'refund_required',
-            code: refundError?.code || 'REFUND_PROVIDER_UNCERTAIN',
-            message: 'تم اكتشاف دفعة بعد إلغاء الطلب وحفظ طلب الاسترداد. تعذر تأكيد نتيجة الاسترداد الآن ولن نرسل طلبًا مكررًا تلقائيًا.',
-          });
+          return res.status(202).json({ ok: true, paid: true, latePayment: true, pending: true, status: 'processing', cancellationStatus: 'refund_required', code: refundError?.code || 'REFUND_PROVIDER_UNCERTAIN', message: 'تم اكتشاف دفعة بعد إلغاء الطلب وحفظ طلب الاسترداد. تعذر تأكيد نتيجة الاسترداد الآن ولن نرسل طلبًا مكررًا تلقائيًا.' });
         }
       }
 
