@@ -82,3 +82,15 @@ test('rejected HyperPay results never report payment or refund success', async (
   assert.equal(refund.resultCode, '800.100.100');
   assert.equal(refund.providerReference, 'provider_rejected_123');
 });
+
+test('rejected HyperPay checkout creation fails closed', async () => {
+  const provider = getPaymentProvider(env, jsonFetch({
+    id: 'checkout_rejected_123',
+    result: { code: '800.100.100', description: 'transaction declined' }
+  }));
+
+  await assert.rejects(
+    provider.createPayment({ amount: 10, currency: 'ILS', merchantTransactionId: 'order_rejected_123' }),
+    (error) => error?.code === 'HYPERPAY_CHECKOUT_REJECTED' && error?.statusCode === 502
+  );
+});
