@@ -1,35 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getPaymentProvider } from '../src/services/payment-provider.js';
+import { getPaymentProvider, PaymentProviderError } from '../src/services/payment-provider.js';
 
 const env = {
   PAYMENT_PROVIDER: 'hyperpay',
   HYPERPAY_ENABLED: 'true',
   HYPERPAY_BASE_URL: 'https://eu-test.oppwa.com',
-  HYPERPAY_ACCESS_TOKEN: 'sandbox-token',
-  HYPERPAY_ENTITY_ID: 'sandbox-entity'
+  HYPERPAY_ACCESS_TOKEN: 'sandbox-test-token',
+  HYPERPAY_ENTITY_ID: 'sandbox-test-entity'
 };
 
-const oversizedBody = JSON.stringify({
-  id: 'provider_reference_12345678',
-  result: { code: '000.000.000', description: 'success' },
-  padding: 'x'.repeat(256 * 1024)
-});
+const oversizedLength = String(256 * 1024 + 1);
 
-function oversizedFetch({ advertised = false } = {}) {
-  return async () => ({
-    ok: true,
-    headers: { get: (name) => advertised && name.toLowerCase() === 'content-length' ? String(Buffer.byteLength(oversizedBody)) : null },
-    text: async () => oversizedBody
-  });
-}
+for (const [name, invoke] of [
+  ['create', provider => provider.createPayment({ amount: 10, currency: 'ILS', merchantTransactionId: 'order_12345678' })],
+  ['verify', provider => provider.verifyPayment({ checkoutId: 'checkout_12345678' })],
+  ['refund', provider => provider.refundPayment({ paymentId: 'payment_12345678', amount: 10, currency: 'ILS' })]
+]) {
+  test(`${name} fails closed on oversized provider response before reading body`, async () => {
+    let bodyReads = 0;
+    const provider = getPaymentProvider(env, async () => ({
+      ok: true,
+      headers: { get: key => key.toLowerCase() === 'content-length' ? oversizedLength : null },
+      text: async () => {
+        bodyReads += 1;
+        throw new Error('oversized body must not be read');
+      }
+    }));
 
-for (const advertised of [true, false]) {
-  test(`oversized HyperPay response fails closed (${advertised ? 'content-length' : 'actual body'})`, async () => {
-    const provider = getPaymentProvider(env, oversizedFetch({ advertised }));
     await assert.rejects(
-      provider.verifyPayment({ checkoutId: 'checkout_reference_12345678' }),
-      (error) => error?.code === 'HYPERPAY_RESPONSE_TOO_LARGE' && error?.statusCode === 502
+      invoke(provider),
+      error => error instanceof PaymentProviderError && error.code === 'HYPERPAY_RESPONSE_TOO_LARGE' && error.statusCode === 502
     );
+    assert.equal(bodyReads, 0);
   });
 }
