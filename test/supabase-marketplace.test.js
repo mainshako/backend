@@ -7,6 +7,10 @@ import {
   supabaseUserHeaders,
   normalizeOrderItems,
   markOrderPayment,
+  getPendingRefund,
+  claimRefundProcessing,
+  recordRefundProcessing,
+  finalizeRefundV2,
   MarketplaceApiError,
 } from '../src/services/supabase-marketplace.js';
 import { assertElectronicOrder, assertElectronicOrderProviderReady } from '../src/routes/marketplace-supabase.js';
@@ -36,6 +40,36 @@ test('payment mutation uses narrow backend RPC when service_role is absent', asy
   const calls = [];
   await markOrderPayment('22222222-2222-2222-2222-222222222222','11111111-1111-1111-1111-111111111111','checkout-reference-123','pending',null,{ SUPABASE_URL:'https://example.supabase.co', SUPABASE_PUBLISHABLE_KEY:'sb_publishable_test', BUTTON_BACKEND_SHARED_SECRET:'server-only-secret' },async (url, options={}) => { calls.push({url,options}); return new Response(JSON.stringify('pending'), { status:200, headers:{'Content-Type':'application/json'} }); });
   assert.match(calls[0].url, /\/rpc\/button_backend_set_order_payment_v2$/); assert.equal(calls[0].options.headers.apikey,'sb_publishable_test'); assert.equal(calls[0].options.headers['x-button-backend-key'],'server-only-secret'); assert.equal(calls[0].options.headers.Authorization,undefined);
+});
+
+test('all privileged refund mutations stay on shared-secret backend RPCs', async () => {
+  const env={ SUPABASE_URL:'https://example.supabase.co', SUPABASE_PUBLISHABLE_KEY:'sb_publishable_test', BUTTON_BACKEND_SHARED_SECRET:'server-only-secret' };
+  const refundId='33333333-3333-3333-3333-333333333333';
+  const orderId='22222222-2222-2222-2222-222222222222';
+  const buyerId='11111111-1111-1111-1111-111111111111';
+  const calls=[];
+  const fetchImpl=async(url,options={})=>{
+    calls.push({url,options});
+    const body=url.endsWith('/button_backend_get_pending_refund')
+      ? [{id:refundId,order_id:orderId,amount:10,currency:'ILS',status:'pending'}]
+      : 'claimed';
+    return new Response(JSON.stringify(body),{status:200,headers:{'Content-Type':'application/json'}});
+  };
+  await getPendingRefund(orderId,buyerId,env,fetchImpl);
+  await claimRefundProcessing(refundId,orderId,buyerId,env,fetchImpl);
+  await recordRefundProcessing(refundId,orderId,buyerId,'processing',null,null,null,env,fetchImpl);
+  await finalizeRefundV2(refundId,orderId,buyerId,false,null,'100.100.100',env,fetchImpl);
+  assert.deepEqual(calls.map(call=>new URL(call.url).pathname.split('/').pop()),[
+    'button_backend_get_pending_refund',
+    'button_backend_claim_refund_processing',
+    'button_backend_record_refund_processing',
+    'button_backend_finalize_refund_v2',
+  ]);
+  for(const call of calls){
+    assert.equal(call.options.headers.apikey,'sb_publishable_test');
+    assert.equal(call.options.headers['x-button-backend-key'],'server-only-secret');
+    assert.equal(call.options.headers.Authorization,undefined);
+  }
 });
 
 test('electronic order is rejected before stock reservation while provider is disabled', () => {
