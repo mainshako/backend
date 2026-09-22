@@ -57,6 +57,10 @@ export function resolveStoredCheckoutReference(order, requestedCheckoutId) {
   return stored;
 }
 
+export function paymentReferenceAfterVerification(checkoutId, verification) {
+  return verification?.paid ? verification.providerReference : checkoutId;
+}
+
 export function marketplaceErrorResponse(error, res) {
   console.error('Button marketplace request failed:', error);
   const statusCode = Number(error?.statusCode);
@@ -208,7 +212,8 @@ export function createMarketplaceSupabaseRouter(environment = process.env) {
       const checkoutId = resolveStoredCheckoutReference(order, req.body?.checkoutId);
       const verification = await getPaymentProvider(environment).verifyPayment({ checkoutId });
       const status = verification.paid ? 'paid' : (verification.pending ? 'pending' : 'failed');
-      const paymentState = await markOrderPayment(order.id, user.id, verification.providerReference, status, verification.resultCode, environment);
+      const paymentReference = paymentReferenceAfterVerification(checkoutId, verification);
+      const paymentState = await markOrderPayment(order.id, user.id, paymentReference, status, verification.resultCode, environment);
 
       if (paymentState === 'refund_required') {
         const paidCancelledOrder = await getMarketplaceOrder(order.id, user.id, accessToken, environment);
