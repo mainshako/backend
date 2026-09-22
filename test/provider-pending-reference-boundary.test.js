@@ -61,3 +61,24 @@ test('pending HyperPay responses with malformed provider references fail closed'
     );
   }
 });
+
+test('rejected HyperPay results never report payment or refund success', async () => {
+  const rejected = {
+    id: 'provider_rejected_123',
+    result: { code: '800.100.100', description: 'transaction declined' }
+  };
+
+  const verifyProvider = getPaymentProvider(env, jsonFetch(rejected));
+  const verification = await verifyProvider.verifyPayment({ checkoutId: 'checkout_rejected_123' });
+  assert.equal(verification.paid, false);
+  assert.equal(verification.pending, false);
+  assert.equal(verification.resultCode, '800.100.100');
+  assert.equal(verification.providerReference, 'provider_rejected_123');
+
+  const refundProvider = getPaymentProvider(env, jsonFetch(rejected));
+  const refund = await refundProvider.refundPayment({ paymentId: 'payment_original_123', amount: 10, currency: 'ILS' });
+  assert.equal(refund.succeeded, false);
+  assert.equal(refund.pending, false);
+  assert.equal(refund.resultCode, '800.100.100');
+  assert.equal(refund.providerReference, 'provider_rejected_123');
+});
