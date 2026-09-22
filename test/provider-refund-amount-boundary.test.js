@@ -10,7 +10,7 @@ const env = {
   HYPERPAY_ENTITY_ID: 'sandbox-test-entity'
 };
 
-for (const amount of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 'not-a-number', '0.004']) {
+for (const amount of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 'not-a-number', '0.004', null, false, [], {}]) {
   test(`invalid refund amount ${String(amount)} fails closed before provider network`, async () => {
     let networkCalls = 0;
     const provider = getPaymentProvider(env, async () => {
